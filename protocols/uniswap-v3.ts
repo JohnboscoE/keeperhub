@@ -201,6 +201,12 @@ const DECREASE_LIQUIDITY_TIP =
 const MIN_AMOUNT_TIP =
   "Slippage guard: the transaction reverts if less than this amount of the token would be removed or added. Set to 0 only for testing - in production, derive it from a recent price so the step cannot be filled at a manipulated rate.";
 
+const COLLECT_RECIPIENT_TIP =
+  "Where the collected tokens go - normally the wallet that owns the position. It must not be the zero address: Uniswap reads that as the position manager itself, and anyone can then sweep the tokens out of it. The action refuses the zero address for that reason.";
+
+const DEADLINE_TIP =
+  "Absolute unix timestamp (seconds) after which the transaction reverts. It is not a duration, and there is no relative-time helper yet, so a literal timestamp in a scheduled workflow will eventually pass and make every later run revert. Until one exists, set a timestamp far enough ahead to cover the life of the schedule.";
+
 const INCREASE_AMOUNT_TIP =
   "The most of this token to add, in its smallest unit. The pool takes both tokens in the position's current price ratio, so usually only one of the two amounts is used in full. The position manager needs an allowance for both tokens before this step runs - use Approve Token. Use WETH, not native ETH.";
 
@@ -214,15 +220,15 @@ const INCREASE_AMOUNT_TIP =
 // cannot express "off-chain simulation"; this is the cleanest place to bridge
 // that gap until AbiFunctionOverride supports a stateMutability override.
 //
-// NonfungiblePositionManager collect / decreaseLiquidity / increaseLiquidity:
-// upstream they are `payable` only so they can be batched inside `multicall`
-// alongside a WETH wrap or `refundETH`. Called directly, as these actions do,
-// any ETH sent stays in the position manager, and its public `refundETH()`
-// pays the whole balance to whoever calls it next. A `payable` ABI would show
-// an ETH Value field whose every non-zero use hands that ETH to a stranger, so
-// they are declared `nonpayable` here. Mutability does not enter the selector
-// or the encoding; the calldata is identical. (`burn` keeps its upstream
-// `payable` and is unchanged by this.)
+// NonfungiblePositionManager burn / collect / decreaseLiquidity /
+// increaseLiquidity: upstream they are `payable` only so they can be batched
+// inside `multicall` alongside a WETH wrap or `refundETH`. Called directly, as
+// these actions do, any ETH sent stays in the position manager, and its public
+// `refundETH()` pays the whole balance to whoever calls it next. A `payable`
+// ABI would show an ETH Value field whose every non-zero use hands that ETH to
+// a stranger, so all four are declared `nonpayable` here. Mutability does not
+// enter the selector or the encoding; the calldata is identical. `burn` was
+// payable before this change and carried the same hazard.
 
 export default defineAbiProtocol({
   name: "Uniswap V3",
@@ -382,7 +388,11 @@ export default defineAbiProtocol({
               helpTip: POSITION_TOKEN_ID_TIP,
               docUrl: UNISWAP_DOCS,
             },
-            recipient: { label: "Recipient Address" },
+            recipient: {
+              label: "Recipient Address",
+              helpTip: COLLECT_RECIPIENT_TIP,
+              docUrl: UNISWAP_DOCS,
+            },
             amount0Max: {
               label: "Max Token 0 Amount (wei)",
               default: UINT128_MAX,
@@ -427,7 +437,11 @@ export default defineAbiProtocol({
               helpTip: MIN_AMOUNT_TIP,
               docUrl: UNISWAP_DOCS,
             },
-            deadline: { label: "Deadline (unix timestamp)" },
+            deadline: {
+              label: "Deadline (unix timestamp)",
+              helpTip: DEADLINE_TIP,
+              docUrl: UNISWAP_DOCS,
+            },
           },
           outputs: {
             amount0: { label: "Token 0 Credited (wei)" },
@@ -465,7 +479,11 @@ export default defineAbiProtocol({
               helpTip: MIN_AMOUNT_TIP,
               docUrl: UNISWAP_DOCS,
             },
-            deadline: { label: "Deadline (unix timestamp)" },
+            deadline: {
+              label: "Deadline (unix timestamp)",
+              helpTip: DEADLINE_TIP,
+              docUrl: UNISWAP_DOCS,
+            },
           },
           outputs: {
             liquidity: { label: "Liquidity Added" },

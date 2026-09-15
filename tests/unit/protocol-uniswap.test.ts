@@ -200,17 +200,35 @@ describe("Uniswap position lifecycle actions", () => {
     ]);
   });
 
-  // Called directly rather than inside multicall, ETH sent to these stays in
-  // the position manager for anyone to sweep with refundETH(). They must not
-  // offer an ETH Value field. burn keeps its upstream payable, unchanged.
-  it("does not make the new lifecycle writes payable", () => {
+  // Called directly rather than inside multicall, ETH sent to any of these
+  // stays in the position manager for anyone to sweep with refundETH(), so
+  // none may offer an ETH Value field. burn carried the same hazard and is
+  // included.
+  it("makes no position-manager write payable", () => {
+    for (const slug of [
+      "collect-fees",
+      "decrease-liquidity",
+      "increase-liquidity",
+      "burn-position",
+    ]) {
+      expect(action(slug).payable, `${slug} must not be payable`).toBeFalsy();
+    }
+  });
+
+  // The recipient decides where the money goes and was the one input without
+  // guidance; every input on these actions carries a tip now.
+  it("gives every lifecycle input a help tip", () => {
     for (const slug of [
       "collect-fees",
       "decrease-liquidity",
       "increase-liquidity",
     ]) {
-      expect(action(slug).payable, `${slug} must not be payable`).toBeFalsy();
+      for (const input of action(slug).inputs) {
+        expect(
+          input.helpTip,
+          `${slug}.${input.name} needs a helpTip`
+        ).toBeTruthy();
+      }
     }
-    expect(action("burn-position").payable).toBe(true);
   });
 });
