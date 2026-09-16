@@ -205,10 +205,19 @@ const COLLECT_RECIPIENT_TIP =
   "Where the collected tokens go - normally the wallet that owns the position. It must not be the zero address: Uniswap reads that as the position manager itself, and anyone can then sweep the tokens out of it. The action refuses the zero address for that reason.";
 
 const DEADLINE_TIP =
-  "Absolute unix timestamp (seconds) after which the transaction reverts. It is not a duration, and there is no relative-time helper yet, so a literal timestamp in a scheduled workflow will eventually pass and make every later run revert. Until one exists, set a timestamp far enough ahead to cover the life of the schedule.";
+  "Absolute unix timestamp (seconds) after which the transaction reverts - not a duration. It exists to bound how long a signed transaction stays fillable: a deadline far in the future removes the only protection against one sitting pending and being mined later at a moved price. There is no relative-time helper yet, so a literal timestamp in a scheduled workflow eventually passes and every later run reverts with 'Transaction too old'. Prefer a short deadline that you refresh, and treat those reverts as the cost of the protection, rather than a distant timestamp that disables it.";
 
 const INCREASE_AMOUNT_TIP =
   "The most of this token to add, in its smallest unit. The pool takes both tokens in the position's current price ratio, so usually only one of the two amounts is used in full. The position manager needs an allowance for both tokens before this step runs - use Approve Token. Use WETH, not native ETH.";
+
+// increaseLiquidity is the only position function without isAuthorizedForToken
+// (Uniswap v3-periphery NonfungiblePositionManager: decreaseLiquidity, collect
+// and burn all carry it). A wrong id therefore does not revert here - it funds
+// a stranger's position and reports success. The step refuses a position this
+// workflow's wallet does not own, and this says so in the field that carries
+// the risk.
+const INCREASE_TOKEN_ID_TIP =
+  "The NFT token ID of the position to add liquidity to. Unlike the other position actions, Uniswap performs no ownership check on this one: a wrong ID deposits your tokens into someone else's position, succeeds, and cannot be undone. This action refuses an ID your wallet does not own, so double-check it against Get Position Details rather than relying on a revert.";
 
 // Two deliberate divergences from upstream mutability in this file.
 //
@@ -456,7 +465,7 @@ export default defineAbiProtocol({
           inputs: {
             tokenId: {
               label: "Position Token ID",
-              helpTip: POSITION_TOKEN_ID_TIP,
+              helpTip: INCREASE_TOKEN_ID_TIP,
               docUrl: UNISWAP_DOCS,
             },
             amount0Desired: {

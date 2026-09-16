@@ -30,12 +30,10 @@ describe("protocol input guards", () => {
     }
   });
 
-  it("rejects zero however it is written", () => {
-    for (const written of [
-      ZERO,
-      `  ${ZERO}  `,
-      ZERO.toUpperCase().replace("0X", "0x"),
-    ]) {
+  it("rejects zero through surrounding whitespace and a 0X prefix", () => {
+    // The zero address has no alphabetic hex digits, so case only matters on
+    // the prefix. Both of these are values a user can paste.
+    for (const written of [`  ${ZERO}  `, ZERO.replace("0x", "0X")]) {
       expect(
         checkProtocolInputGuards("uniswap", "collect", { recipient: written })
           .ok,
@@ -44,16 +42,61 @@ describe("protocol input guards", () => {
     }
   });
 
-  it("accepts a real recipient", () => {
+  // Naming the position manager directly reaches the same end state as the
+  // zero sentinel: the fees sit in a contract whose sweepToken is public.
+  it("rejects the position manager itself when the chain is known", () => {
+    const manager = uniswapDef.contracts.positionManager.addresses["1"];
+
     expect(
-      checkProtocolInputGuards("uniswap", "collect", { recipient: WALLET }).ok
+      checkProtocolInputGuards(
+        "uniswap",
+        "collect",
+        { recipient: manager },
+        { network: "1" }
+      ).ok
+    ).toBe(false);
+    // Mixed case must not slip past the comparison.
+    expect(
+      checkProtocolInputGuards(
+        "uniswap",
+        "collect",
+        { recipient: manager.toLowerCase() },
+        { network: "1" }
+      ).ok
+    ).toBe(false);
+    // A different chain's context leaves that address unremarkable.
+    expect(
+      checkProtocolInputGuards(
+        "uniswap",
+        "collect",
+        { recipient: manager },
+        { network: "8453" }
+      ).ok
     ).toBe(true);
+  });
+
+  it("accepts a real recipient, mixed case included", () => {
+    for (const recipient of [WALLET, WALLET.toLowerCase()]) {
+      expect(
+        checkProtocolInputGuards("uniswap", "collect", { recipient }).ok,
+        recipient
+      ).toBe(true);
+    }
   });
 
   // A malformed address is the encoder's to reject, with its own message, and
   // a missing one is the required-field check's. Neither is this guard's job.
+  // These all throw inside getAddress and are the encoder's to reject, with
+  // its own message. Pinned so the next guard author sees the real boundary.
   it("leaves malformed and missing values to the checks that own them", () => {
-    for (const recipient of ["not-an-address", "0x1234", "", undefined]) {
+    for (const recipient of [
+      "not-an-address",
+      "0x1234",
+      "0x0",
+      "0x00",
+      "",
+      undefined,
+    ]) {
       expect(
         checkProtocolInputGuards("uniswap", "collect", { recipient }).ok,
         String(recipient)

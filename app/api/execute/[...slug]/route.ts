@@ -15,6 +15,7 @@ import {
 } from "@/lib/idempotency";
 import { SCOPE_MCP_WRITE } from "@/lib/mcp/oauth-scopes";
 import { requireScope } from "@/lib/middleware/require-scope";
+import { checkProtocolOnchainGuards } from "@/lib/protocol-input-guards-onchain";
 import { getProtocol, resolveContractAddress } from "@/lib/protocol-registry";
 import { applyRateLimitHeaders } from "@/lib/rate-limit-headers";
 import { getChainIdFromNetwork } from "@/lib/rpc/network-utils";
@@ -205,6 +206,33 @@ async function executeProtocolAction(
     };
     const result = await readContractCore(coreInput);
     return recordIdempotentResponse(idem, NextResponse.json(result));
+  }
+
+  // Guards that need a round trip, after the cheap ones inside
+  // buildProtocolFunctionArgs and before any gate that costs the caller
+  // something. Shared with the workflow write step.
+  const onchainGuard = await checkProtocolOnchainGuards({
+    protocolSlug: meta.protocolSlug,
+    functionName: meta.functionName,
+    inputs: body,
+    network,
+    organizationId,
+    web3Connection:
+      typeof body.web3Connection === "string" ? body.web3Connection : undefined,
+  });
+  if (!onchainGuard.ok) {
+    return recordIdempotentResponse(
+      idem,
+      NextResponse.json(
+        {
+          success: false,
+          error: onchainGuard.error,
+          field: onchainGuard.field,
+        },
+        { status: HttpStatus.BAD_REQUEST }
+      ),
+      "release"
+    );
   }
 
   // KEEP-793 / A-07: protocol write actions sign and broadcast a real tx from

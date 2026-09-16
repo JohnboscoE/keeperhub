@@ -302,6 +302,10 @@ describe("Uniswap V3 on-chain integration (Sepolia)", () => {
     itOnchain(
       `${actionSlug}: estimateGas calldata is valid (business revert expected)`,
       async () => {
+        // Without this, a run where estimateGas returns instead of throwing
+        // passes with nothing asserted - and for increase-liquidity, the one
+        // action with no ownership check, success is the case worth seeing.
+        expect.hasAssertions();
         const { to, data } = buildCalldata({
           protocol: uniswapDef,
           actionSlug,
@@ -311,9 +315,10 @@ describe("Uniswap V3 on-chain integration (Sepolia)", () => {
 
         const provider = await makeProvider();
         try {
-          await provider.executeWithFailover(
+          const gas = await provider.executeWithFailover(
             async (p) => await p.estimateGas({ to, data, from: TEST_ADDRESS })
           );
+          expect(gas).toBeGreaterThan(BigInt(0));
         } catch (error) {
           const msg = String(error);
           expect(msg).not.toContain("INVALID_ARGUMENT");

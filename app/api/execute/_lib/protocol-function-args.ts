@@ -67,7 +67,9 @@ export function buildProtocolFunctionArgs(
   // Value-level guards the ABI cannot express (a shape-valid address that
   // redirects funds). Shared with the workflow write step so both paths
   // refuse the same values.
-  const guard = checkProtocolInputGuards(protocolSlug, functionName, input);
+  const guard = checkProtocolInputGuards(protocolSlug, functionName, input, {
+    network: typeof input.network === "string" ? input.network : undefined,
+  });
   if (!guard.ok) {
     return { ok: false, error: guard.error, field: guard.field };
   }

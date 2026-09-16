@@ -215,6 +215,32 @@ describe("Uniswap position lifecycle actions", () => {
     }
   });
 
+  // Slippage and deadline must stay required with no default. A default of
+  // "0" on the minimums would make every run a zero-slippage withdrawal, and a
+  // default deadline would do the same for expiry - the builder, the route and
+  // the encoder all reject a blank only because there is nothing to fall back
+  // to.
+  it("leaves slippage and deadline required with no default", () => {
+    const cases: [string, string[]][] = [
+      ["decrease-liquidity", ["amount0Min", "amount1Min", "deadline"]],
+      ["increase-liquidity", ["amount0Min", "amount1Min", "deadline"]],
+    ];
+    for (const [slug, names] of cases) {
+      for (const name of names) {
+        const input = action(slug).inputs.find((i) => i.name === name);
+        expect(input, `${slug}.${name}`).toBeDefined();
+        expect(
+          input?.default,
+          `${slug}.${name} must have no default`
+        ).toBeUndefined();
+        expect(
+          input?.required,
+          `${slug}.${name} must not be optional`
+        ).not.toBe(false);
+      }
+    }
+  });
+
   // The recipient decides where the money goes and was the one input without
   // guidance; every input on these actions carries a tip now.
   it("gives every lifecycle input a help tip", () => {
