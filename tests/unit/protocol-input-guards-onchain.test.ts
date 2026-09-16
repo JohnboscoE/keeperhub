@@ -23,7 +23,8 @@ import uniswapDef from "@/protocols/uniswap-v3";
 
 const WALLET = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
 const SAFE = "0x1111111111111111111111111111111111111111";
-const STRANGER = "0x6d64492e2b90f25F8Db3033942560377E166AB99";
+// Synthetic: this only has to be an address the wallet does not control.
+const STRANGER = "0x00000000000000000000000000000000000000a2";
 
 registerProtocol(uniswapDef);
 
