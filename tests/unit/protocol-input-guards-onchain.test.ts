@@ -19,6 +19,7 @@ vi.mock("@/lib/safe/signer-resolver", () => ({
 
 import { checkProtocolOnchainGuards } from "@/lib/protocol-input-guards-onchain";
 import { registerProtocol } from "@/lib/protocol-registry";
+import { structureAbiOutputs } from "@/plugins/web3/steps/structure-abi-result";
 import uniswapDef from "@/protocols/uniswap-v3";
 
 const WALLET = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
@@ -37,10 +38,14 @@ const increase = (inputs: Record<string, unknown>, organizationId = "org_1") =>
     organizationId,
   });
 
+// Built with the real structureAbiOutputs rather than by hand: readContractCore
+// runs every result through it, and a single *named* output comes back as
+// { owner: value }. A hand-written bare string here is what let a guard that
+// compared "[object Object]" to an address pass its own tests.
 const ownerIs = (owner: string) => {
   mockReadContractCore.mockResolvedValue({
     success: true,
-    result: owner,
+    result: structureAbiOutputs([owner], [{ name: "owner", type: "address" }]),
     addressLink: "",
   });
 };
@@ -68,6 +73,28 @@ describe("uniswap increase-liquidity ownership guard", () => {
       expect(result.error).toContain(STRANGER);
       expect(result.error).toContain(WALLET);
     }
+  });
+
+  it("returns the owner behind the ABI output name, not the result object", async () => {
+    ownerIs(WALLET);
+
+    // Guards the exact regression: if the guard read `result` instead of
+    // `result.owner`, this comparison would stringify an object and refuse
+    // every call, valid ones included.
+    expect((await increase({ tokenId: "180205" })).ok).toBe(true);
+    ownerIs(STRANGER);
+    expect((await increase({ tokenId: "180205" })).ok).toBe(false);
+  });
+
+  // A JSON body carries "tokenId": 180205 as a number, and the direct-execute
+  // route passes the body through untouched.
+  it("reads the owner for a numeric token id too", async () => {
+    ownerIs(STRANGER);
+
+    const result = await increase({ tokenId: 180_205 });
+
+    expect(mockReadContractCore).toHaveBeenCalled();
+    expect(result.ok).toBe(false);
   });
 
   it("allows a position the workflow wallet owns", async () => {

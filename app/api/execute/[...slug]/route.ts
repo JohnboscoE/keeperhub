@@ -175,7 +175,10 @@ async function executeProtocolAction(
     body,
     meta.protocolSlug,
     meta.contractKey,
-    meta.functionName
+    meta.functionName,
+    // Normalized above: the body may carry `chainId`, the deprecated `network`
+    // alias, or a chain name, and the guards index addresses by chain id.
+    network
   );
   if (!argsResult.ok) {
     // Pre-broadcast validation: release so the same key can retry with a
@@ -208,33 +211,6 @@ async function executeProtocolAction(
     return recordIdempotentResponse(idem, NextResponse.json(result));
   }
 
-  // Guards that need a round trip, after the cheap ones inside
-  // buildProtocolFunctionArgs and before any gate that costs the caller
-  // something. Shared with the workflow write step.
-  const onchainGuard = await checkProtocolOnchainGuards({
-    protocolSlug: meta.protocolSlug,
-    functionName: meta.functionName,
-    inputs: body,
-    network,
-    organizationId,
-    web3Connection:
-      typeof body.web3Connection === "string" ? body.web3Connection : undefined,
-  });
-  if (!onchainGuard.ok) {
-    return recordIdempotentResponse(
-      idem,
-      NextResponse.json(
-        {
-          success: false,
-          error: onchainGuard.error,
-          field: onchainGuard.field,
-        },
-        { status: HttpStatus.BAD_REQUEST }
-      ),
-      "release"
-    );
-  }
-
   // KEEP-793 / A-07: protocol write actions sign and broadcast a real tx from
   // the org wallet, so they must clear the same gates as every other direct
   // write path (transfer, contract-call, check-and-execute): plan execution
@@ -265,6 +241,35 @@ async function executeProtocolAction(
       idem,
       NextResponse.json(
         { success: false, error: parsedValue.error },
+        { status: HttpStatus.BAD_REQUEST }
+      ),
+      "release"
+    );
+  }
+
+  // Guards that need a round trip. Placed just above the first gate that
+  // costs the caller anything: the limit and concurrency checks above only
+  // read counters and answer 429, so an org already at its limit should get
+  // that answer without this endpoint issuing an ownerOf read per request.
+  // Shared with the workflow write step.
+  const onchainGuard = await checkProtocolOnchainGuards({
+    protocolSlug: meta.protocolSlug,
+    functionName: meta.functionName,
+    inputs: body,
+    network,
+    organizationId,
+    web3Connection:
+      typeof body.web3Connection === "string" ? body.web3Connection : undefined,
+  });
+  if (!onchainGuard.ok) {
+    return recordIdempotentResponse(
+      idem,
+      NextResponse.json(
+        {
+          success: false,
+          error: onchainGuard.error,
+          field: onchainGuard.field,
+        },
         { status: HttpStatus.BAD_REQUEST }
       ),
       "release"

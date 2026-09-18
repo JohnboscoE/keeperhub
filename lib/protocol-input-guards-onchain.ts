@@ -73,8 +73,11 @@ export async function checkProtocolOnchainGuards(
     return { ok: true };
   }
 
-  const rawTokenId = input.inputs.tokenId;
-  const tokenId = typeof rawTokenId === "string" ? rawTokenId.trim() : "";
+  // Not `typeof raw === "string"`: a JSON body carries `"tokenId": 180205` as a
+  // number, and the direct-execute route passes the body through untouched, so
+  // narrowing to strings would skip the read for exactly the caller this guard
+  // exists to stop. A template rendering to a native value lands the same way.
+  const tokenId = String(input.inputs.tokenId ?? "").trim();
   // A malformed id is the encoder's to reject, with its own message.
   if (!DIGITS.test(tokenId)) {
     return { ok: true };
@@ -123,7 +126,15 @@ export async function checkProtocolOnchainGuards(
     return { ok: true };
   }
 
-  const owner = String(read.result);
+  // readContractCore runs results through structureAbiOutputs, which wraps a
+  // single *named* output as { owner: value } - so the value is behind the
+  // ABI's output name, not the result itself.
+  const owner = String(
+    (read.result as { owner?: unknown } | null)?.owner ?? ""
+  ).trim();
+  if (owner === "") {
+    return { ok: true };
+  }
   if (owner.toLowerCase() === expected.toLowerCase()) {
     return { ok: true };
   }

@@ -49,7 +49,10 @@ export function buildProtocolFunctionArgs(
   input: Record<string, unknown>,
   protocolSlug: string,
   contractKey: string,
-  functionName: string
+  functionName: string,
+  /** Normalized chain id. The body's own `network`/`chainId` may be a chain
+   *  name or the deprecated alias, and guards index addresses by chain id. */
+  network?: string
 ): BuildProtocolFunctionArgsResult {
   const protocol = getProtocol(protocolSlug);
   if (!protocol) {
@@ -68,7 +71,7 @@ export function buildProtocolFunctionArgs(
   // redirects funds). Shared with the workflow write step so both paths
   // refuse the same values.
   const guard = checkProtocolInputGuards(protocolSlug, functionName, input, {
-    network: typeof input.network === "string" ? input.network : undefined,
+    network,
   });
   if (!guard.ok) {
     return { ok: false, error: guard.error, field: guard.field };

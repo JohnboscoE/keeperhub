@@ -163,7 +163,7 @@
       },
       "data": {
         "label": "Decrease Liquidity",
-        "description": "Remove liquidity from a position (Sepolia)",
+        "description": "Remove liquidity from a position (Sepolia) Testnet placeholders: zero minimums and a far deadline are unsafe on mainnet - use a real minimum from a recent price and a short deadline you refresh.",
         "type": "action",
         "config": {
           "actionType": "uniswap/decrease-liquidity",
@@ -186,7 +186,7 @@
       },
       "data": {
         "label": "Increase Liquidity",
-        "description": "Add liquidity to a position (Sepolia)",
+        "description": "Add liquidity to a position (Sepolia) Testnet placeholders: zero minimums and a far deadline are unsafe on mainnet - use a real minimum from a recent price and a short deadline you refresh.",
         "type": "action",
         "config": {
           "actionType": "uniswap/increase-liquidity",
