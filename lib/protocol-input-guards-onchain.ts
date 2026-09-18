@@ -115,6 +115,11 @@ export async function checkProtocolOnchainGuards(
     abiFunction: "ownerOf",
     functionArgs: JSON.stringify([tokenId]),
     failOnError: false,
+    // Without this the read resolves the system-default provider while the
+    // rest of the route uses the org's. An org configures a custom RPC
+    // precisely because the default is unreachable for it, so omitting this
+    // fails the guard open exactly where the write it protects still lands.
+    _context: { organizationId: input.organizationId },
   });
 
   if (!read.success || read.error !== undefined || read.result === null) {

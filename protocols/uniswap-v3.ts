@@ -213,11 +213,11 @@ const INCREASE_AMOUNT_TIP =
 // increaseLiquidity is the only position function without isAuthorizedForToken
 // (Uniswap v3-periphery NonfungiblePositionManager: decreaseLiquidity, collect
 // and burn all carry it). A wrong id therefore does not revert here - it funds
-// a stranger's position and reports success. The step refuses a position this
-// workflow's wallet does not own, and this says so in the field that carries
-// the risk.
+// a stranger's position and reports success. The step reads the owner first
+// where it can, but that read fails open (see lib/protocol-input-guards-
+// onchain.ts), so the tip must not promise a check the user can rely on.
 const INCREASE_TOKEN_ID_TIP =
-  "The NFT token ID of the position to add liquidity to. Unlike the other position actions, Uniswap performs no ownership check on this one: a wrong ID deposits your tokens into someone else's position, succeeds, and cannot be undone. This action refuses an ID your wallet does not own, so double-check it against Get Position Details rather than relying on a revert.";
+  "The NFT token ID of the position to add liquidity to. Unlike the other position actions, Uniswap performs no ownership check on this one: a wrong ID deposits your tokens into someone else's position, succeeds, and cannot be undone. This action reads the position's owner first and refuses an ID your wallet does not own, but that read is skipped when the owner cannot be fetched, so verify the ID yourself against Get Position Details rather than relying on either the check or a revert.";
 
 // Two deliberate divergences from upstream mutability in this file.
 //

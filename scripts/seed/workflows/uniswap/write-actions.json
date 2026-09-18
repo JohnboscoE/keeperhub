@@ -141,7 +141,7 @@
       },
       "data": {
         "label": "Collect Fees",
-        "description": "Collect position fees (Sepolia)",
+        "description": "Collect position fees (Sepolia) Testnet placeholder: the recipient below is a dummy address nobody controls, and it is the destination of the funds - fees sent there are gone, with no revert to warn you. Set it to the wallet that should receive the fees before running this anywhere real.",
         "type": "action",
         "config": {
           "actionType": "uniswap/collect-fees",
