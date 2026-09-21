@@ -371,6 +371,7 @@ export async function protocolWriteStep(
       inputs: input as Record<string, unknown>,
       network: input.network,
       organizationId: input._context?.organizationId,
+      executionId: input._context?.executionId,
       web3Connection: input.web3Connection as string | undefined,
     });
     if (!onchainGuard.ok) {

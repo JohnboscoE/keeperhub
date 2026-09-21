@@ -97,22 +97,6 @@ describe("uniswap increase-liquidity ownership guard", () => {
     expect(result.ok).toBe(false);
   });
 
-  // read-contract-core derives the RPC preference from _context.organizationId.
-  // Without it the guard reads through the system-default provider while the
-  // rest of the route uses the org's, so an org whose custom RPC exists because
-  // the default is unreachable gets a guard that fails open on every call.
-  it("reads through the organization's RPC preference", async () => {
-    ownerIs(WALLET);
-
-    await increase({ tokenId: "180205" }, "org_custom_rpc");
-
-    expect(mockReadContractCore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        _context: { organizationId: "org_custom_rpc" },
-      })
-    );
-  });
-
   it("allows a position the workflow wallet owns", async () => {
     ownerIs(WALLET);
 

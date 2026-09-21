@@ -37,6 +37,12 @@ export type ProtocolOnchainGuardInput = {
   inputs: Record<string, unknown>;
   network: string;
   organizationId: string | undefined;
+  /**
+   * The workflow execution this write belongs to, when there is one. RPC
+   * preferences are resolved from the execution's user, so this is what lets
+   * the ownerOf read use the same provider as the write it guards.
+   */
+  executionId?: string;
   web3Connection?: string | null;
 };
 
@@ -115,11 +121,14 @@ export async function checkProtocolOnchainGuards(
     abiFunction: "ownerOf",
     functionArgs: JSON.stringify([tokenId]),
     failOnError: false,
-    // Without this the read resolves the system-default provider while the
-    // rest of the route uses the org's. An org configures a custom RPC
-    // precisely because the default is unreachable for it, so omitting this
-    // fails the guard open exactly where the write it protects still lands.
-    _context: { organizationId: input.organizationId },
+    // Match the provider the write will use. On the workflow path the write
+    // resolves the execution's user and honours their RPC preference, so the
+    // read must carry the same executionId - and must NOT carry
+    // organizationId, which readContractCore treats as "direct execution" and
+    // uses to skip that lookup. The direct-execute route passes no executionId
+    // (none exists before reservation), and its write passes organizationId,
+    // so both land on the chain default there.
+    _context: { executionId: input.executionId },
   });
 
   if (!read.success || read.error !== undefined || read.result === null) {
