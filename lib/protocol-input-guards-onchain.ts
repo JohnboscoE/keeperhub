@@ -121,13 +121,21 @@ export async function checkProtocolOnchainGuards(
     abiFunction: "ownerOf",
     functionArgs: JSON.stringify([tokenId]),
     failOnError: false,
-    // Match the provider the write will use. On the workflow path the write
-    // resolves the execution's user and honours their RPC preference, so the
-    // read must carry the same executionId - and must NOT carry
-    // organizationId, which readContractCore treats as "direct execution" and
-    // uses to skip that lookup. The direct-execute route passes no executionId
-    // (none exists before reservation), and its write passes organizationId,
-    // so both land on the chain default there.
+    // Match the provider the write will use. Pass executionId and never
+    // organizationId: readContractCore treats organizationId as "skip the
+    // preference lookup", so adding it would force the chain default even
+    // where the write honours a user's RPC. The three callers:
+    //
+    // - Workflow runs: executionId is a workflowExecutions row, so
+    //   getRpcPreferenceUserId finds the user and the read and the write both
+    //   use their preferred RPC.
+    // - /api/execute/node: executionId is a directExecutions row. That lookup
+    //   selects from workflowExecutions only, misses, and returns undefined,
+    //   so the read and the write (which gets the same { executionId }) both
+    //   use the chain default.
+    // - /api/execute/{protocol}/{action}: the guard runs before reservation
+    //   with no executionId, and that route's write passes organizationId, so
+    //   both use the chain default.
     _context: { executionId: input.executionId },
   });
 

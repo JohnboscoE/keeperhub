@@ -9,9 +9,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("server-only", () => ({}));
 
-const EXECUTION_USER = "user_exec_42";
-
-const { mockGetRpcProvider, mockResolveSignerForNode } = vi.hoisted(() => ({
+const {
+  DIRECT_EXECUTION_ID,
+  EXECUTION_USER,
+  WORKFLOW_EXECUTION_ID,
+  mockGetRpcProvider,
+  mockResolveSignerForNode,
+} = vi.hoisted(() => ({
+  DIRECT_EXECUTION_ID: "direct_exec_1",
+  EXECUTION_USER: "user_exec_42",
+  WORKFLOW_EXECUTION_ID: "wf_exec_1",
   mockGetRpcProvider: vi.fn(),
   mockResolveSignerForNode: vi.fn(),
 }));
@@ -24,13 +31,22 @@ vi.mock("@/lib/logging", () => ({
   logUserError: vi.fn(),
 }));
 
-// The only row getRpcPreferenceUserId reads: the execution's user.
+// Keyed on table and id, like the real database: only a workflowExecutions
+// row for the workflow run carries a user. A directExecutions id - what
+// /api/execute/node passes - finds nothing there, which is what puts that
+// path on the chain default. A mock answering every id would hide that.
 vi.mock("@/lib/db", () => ({
   db: {
     select: () => ({
-      from: () => ({
-        where: () => ({
-          limit: () => Promise.resolve([{ userId: EXECUTION_USER }]),
+      from: (table: { tableName?: string }) => ({
+        where: (condition: { value?: unknown }) => ({
+          limit: () =>
+            Promise.resolve(
+              table.tableName === "workflow_executions" &&
+                condition.value === WORKFLOW_EXECUTION_ID
+                ? [{ userId: EXECUTION_USER }]
+                : []
+            ),
         }),
       }),
     }),
@@ -38,11 +54,15 @@ vi.mock("@/lib/db", () => ({
 }));
 
 vi.mock("@/lib/db/schema", () => ({
-  workflowExecutions: { id: "id", userId: "userId" },
+  workflowExecutions: {
+    tableName: "workflow_executions",
+    id: "id",
+    userId: "userId",
+  },
 }));
 
 vi.mock("drizzle-orm", () => ({
-  eq: () => ({}),
+  eq: (_column: unknown, value: unknown) => ({ value }),
   sql: () => ({}),
 }));
 
@@ -97,16 +117,29 @@ describe("increase-liquidity ownership guard RPC selection", () => {
   // open for exactly the users whose custom RPC exists because the default
   // does not work for them.
   it("reads through the execution user's RPC preference on the workflow path", async () => {
-    await increase("exec_1");
+    await increase(WORKFLOW_EXECUTION_ID);
 
     expect(mockGetRpcProvider).toHaveBeenCalledWith(
       expect.objectContaining({ chainId: 1, userId: EXECUTION_USER })
     );
   });
 
-  // The direct-execute route has no execution yet when the guard runs, and its
-  // write passes organizationId, which resolves the chain default. The guard
-  // must land there too.
+  // /api/execute/node always creates a directExecutions row and passes its id.
+  // The preference lookup reads workflowExecutions only, so it misses and the
+  // read uses the chain default - the same provider that route's write gets.
+  // If the lookup ever learns to resolve direct executions, this fails and
+  // says so.
+  it("uses the chain default for a direct execution id", async () => {
+    await increase(DIRECT_EXECUTION_ID);
+
+    expect(mockGetRpcProvider).toHaveBeenCalledWith(
+      expect.objectContaining({ chainId: 1, userId: undefined })
+    );
+  });
+
+  // /api/execute/{protocol}/{action} runs the guard before reservation, so
+  // there is no execution id at all, and its write passes organizationId,
+  // which also resolves the chain default.
   it("uses the chain default when there is no execution", async () => {
     await increase(undefined);
 
