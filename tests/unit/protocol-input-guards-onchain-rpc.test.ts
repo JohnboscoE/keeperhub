@@ -31,10 +31,12 @@ vi.mock("@/lib/logging", () => ({
   logUserError: vi.fn(),
 }));
 
-// Keyed on table and id, like the real database: only a workflowExecutions
-// row for the workflow run carries a user. A directExecutions id - what
-// /api/execute/node passes - finds nothing there, which is what puts that
-// path on the chain default. A mock answering every id would hide that.
+// Keyed on table and id: only a workflowExecutions row for the workflow run
+// carries a user. The table is recognised by a tableName the schema mock below
+// supplies itself - real drizzle tables carry their name on a symbol. A
+// directExecutions id - what /api/execute/node passes - finds nothing there,
+// which is what puts that read on the chain default. A mock answering every id
+// would hide that.
 vi.mock("@/lib/db", () => ({
   db: {
     select: () => ({
@@ -126,9 +128,8 @@ describe("increase-liquidity ownership guard RPC selection", () => {
 
   // /api/execute/node always creates a directExecutions row and passes its id.
   // The preference lookup reads workflowExecutions only, so it misses and the
-  // read uses the chain default - the same provider that route's write gets.
-  // If the lookup ever learns to resolve direct executions, this fails and
-  // says so.
+  // read uses the chain default. If the lookup ever learns to resolve direct
+  // executions, this fails and says so.
   it("uses the chain default for a direct execution id", async () => {
     await increase(DIRECT_EXECUTION_ID);
 

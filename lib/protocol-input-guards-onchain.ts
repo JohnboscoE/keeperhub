@@ -131,8 +131,7 @@ export async function checkProtocolOnchainGuards(
     //   use their preferred RPC.
     // - /api/execute/node: executionId is a directExecutions row. That lookup
     //   selects from workflowExecutions only, misses, and returns undefined,
-    //   so the read and the write (which gets the same { executionId }) both
-    //   use the chain default.
+    //   so the read uses the chain default.
     // - /api/execute/{protocol}/{action}: the guard runs before reservation
     //   with no executionId, and that route's write passes organizationId, so
     //   both use the chain default.
