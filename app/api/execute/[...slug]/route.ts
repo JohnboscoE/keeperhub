@@ -258,8 +258,6 @@ async function executeProtocolAction(
     inputs: body,
     network,
     organizationId,
-    web3Connection:
-      typeof body.web3Connection === "string" ? body.web3Connection : undefined,
   });
   if (!onchainGuard.ok) {
     return recordIdempotentResponse(

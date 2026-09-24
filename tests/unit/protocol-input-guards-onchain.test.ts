@@ -38,17 +38,49 @@ const increase = (inputs: Record<string, unknown>, organizationId = "org_1") =>
     organizationId,
   });
 
+const ZERO = "0x0000000000000000000000000000000000000000";
+
 // Built with the real structureAbiOutputs rather than by hand: readContractCore
 // runs every result through it, and a single *named* output comes back as
 // { owner: value }. A hand-written bare string here is what let a guard that
 // compared "[object Object]" to an address pass its own tests.
-const ownerIs = (owner: string) => {
-  mockReadContractCore.mockResolvedValue({
-    success: true,
-    result: structureAbiOutputs([owner], [{ name: "owner", type: "address" }]),
-    addressLink: "",
-  });
+//
+// Keyed on abiFunction because the guard reads ownerOf and, only when that
+// does not match, the two approval views the position manager itself checks.
+const onChain = (state: {
+  owner: string;
+  approved?: string;
+  approvedForAll?: boolean;
+  approvalsFail?: boolean;
+}) => {
+  mockReadContractCore.mockImplementation(
+    ({ abiFunction }: { abiFunction: string }) => {
+      const ok = (value: unknown, name: string, type: string) =>
+        Promise.resolve({
+          success: true,
+          result: structureAbiOutputs([value], [{ name, type }]),
+          addressLink: "",
+        });
+      if (abiFunction === "ownerOf") {
+        return ok(state.owner, "owner", "address");
+      }
+      if (state.approvalsFail) {
+        return Promise.resolve({
+          success: false,
+          error: "call reverted",
+          result: null,
+          addressLink: "",
+        });
+      }
+      if (abiFunction === "getApproved") {
+        return ok(state.approved ?? ZERO, "operator", "address");
+      }
+      return ok(state.approvedForAll ?? false, "approved", "bool");
+    }
+  );
 };
+
+const ownerIs = (owner: string) => onChain({ owner });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -136,6 +168,62 @@ describe("uniswap increase-liquidity ownership guard", () => {
     });
 
     expect((await increase({ tokenId: "180205" })).ok).toBe(true);
+  });
+
+  // The position manager gates every recovering call (decreaseLiquidity,
+  // collect, burn) on _isApprovedOrOwner, so an approved operator can withdraw
+  // what this step adds. Owner equality alone would block a legitimate,
+  // fully recoverable arrangement forever.
+  it("allows a position the wallet is the approved operator for", async () => {
+    onChain({ owner: STRANGER, approved: WALLET });
+
+    expect((await increase({ tokenId: "180205" })).ok).toBe(true);
+  });
+
+  it("allows a position whose owner approved the wallet for all", async () => {
+    onChain({ owner: STRANGER, approvedForAll: true });
+
+    expect((await increase({ tokenId: "180205" })).ok).toBe(true);
+  });
+
+  it("refuses, and says so, when the approvals cannot be read", async () => {
+    onChain({ owner: STRANGER, approvalsFail: true });
+
+    const result = await increase({ tokenId: "180205" });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("could not be read");
+    }
+  });
+
+  // Previously a throw here returned ok, so any input that made signer
+  // resolution fail switched the guard off. Failing to work out who signs is
+  // not evidence that the position is owned.
+  it("refuses when the signer cannot be resolved", async () => {
+    ownerIs(WALLET);
+    mockResolveSignerForNode.mockRejectedValue(
+      new Error("Invalid web3Connection value 'x'")
+    );
+
+    const result = await increase({ tokenId: "180205" });
+
+    expect(result.ok).toBe(false);
+    expect(mockReadContractCore).not.toHaveBeenCalled();
+  });
+
+  // Neither write honours a caller-supplied web3Connection - the direct route
+  // records it as a rejected override and protocolWriteStep leaves it out of
+  // the write - so the guard must resolve under org policy or it would compute
+  // a sender the write never uses.
+  it("resolves the signer under org policy, never a supplied connection", async () => {
+    ownerIs(WALLET);
+
+    await increase({ tokenId: "180205", web3Connection: "eoa" });
+
+    expect(mockResolveSignerForNode).toHaveBeenCalledWith(
+      expect.objectContaining({ web3Connection: undefined })
+    );
   });
 
   it("does not call the chain for other functions, malformed ids, or no org", async () => {

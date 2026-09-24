@@ -25,9 +25,11 @@ const {
 
 vi.mock("@/lib/logging", () => ({
   ErrorCategory: {
-    VALIDATION: "validation",
+    CONFIGURATION: "configuration",
     NETWORK_RPC: "network_rpc",
+    VALIDATION: "validation",
   },
+  logSystemWarn: vi.fn(),
   logUserError: vi.fn(),
 }));
 
