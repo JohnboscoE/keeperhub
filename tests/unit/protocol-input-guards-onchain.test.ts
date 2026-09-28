@@ -4,10 +4,12 @@ vi.mock("server-only", () => ({}));
 
 // vi.mock factories are hoisted above const declarations, and these run while
 // the module under test is imported, so the fns must be hoisted with them.
-const { mockReadContractCore, mockResolveSignerForNode } = vi.hoisted(() => ({
-  mockReadContractCore: vi.fn(),
-  mockResolveSignerForNode: vi.fn(),
-}));
+const { mockListOrgSafes, mockReadContractCore, mockResolveSignerForNode } =
+  vi.hoisted(() => ({
+    mockListOrgSafes: vi.fn(),
+    mockReadContractCore: vi.fn(),
+    mockResolveSignerForNode: vi.fn(),
+  }));
 
 vi.mock("@/plugins/web3/steps/read-contract-core", () => ({
   readContractCore: mockReadContractCore,
@@ -15,6 +17,9 @@ vi.mock("@/plugins/web3/steps/read-contract-core", () => ({
 vi.mock("@/lib/safe/signer-resolver", () => ({
   SIGNER_MODE: { EOA: "eoa", SAFE: "safe", SAFE_ROLE: "safe-role" },
   resolveSignerForNode: mockResolveSignerForNode,
+}));
+vi.mock("@/lib/safe/deployment", () => ({
+  listOrgSafes: mockListOrgSafes,
 }));
 
 import { checkProtocolOnchainGuards } from "@/lib/protocol-input-guards-onchain";
@@ -38,49 +43,28 @@ const increase = (inputs: Record<string, unknown>, organizationId = "org_1") =>
     organizationId,
   });
 
-const ZERO = "0x0000000000000000000000000000000000000000";
-
 // Built with the real structureAbiOutputs rather than by hand: readContractCore
 // runs every result through it, and a single *named* output comes back as
 // { owner: value }. A hand-written bare string here is what let a guard that
 // compared "[object Object]" to an address pass its own tests.
-//
-// Keyed on abiFunction because the guard reads ownerOf and, only when that
-// does not match, the two approval views the position manager itself checks.
-const onChain = (state: {
-  owner: string;
-  approved?: string;
-  approvedForAll?: boolean;
-  approvalsFail?: boolean;
-}) => {
-  mockReadContractCore.mockImplementation(
-    ({ abiFunction }: { abiFunction: string }) => {
-      const ok = (value: unknown, name: string, type: string) =>
-        Promise.resolve({
-          success: true,
-          result: structureAbiOutputs([value], [{ name, type }]),
-          addressLink: "",
-        });
-      if (abiFunction === "ownerOf") {
-        return ok(state.owner, "owner", "address");
-      }
-      if (state.approvalsFail) {
-        return Promise.resolve({
-          success: false,
-          error: "call reverted",
-          result: null,
-          addressLink: "",
-        });
-      }
-      if (abiFunction === "getApproved") {
-        return ok(state.approved ?? ZERO, "operator", "address");
-      }
-      return ok(state.approvedForAll ?? false, "approved", "bool");
-    }
-  );
+const ownerIs = (owner: string) => {
+  mockReadContractCore.mockResolvedValue({
+    success: true,
+    result: structureAbiOutputs([owner], [{ name: "owner", type: "address" }]),
+    addressLink: "",
+  });
 };
 
-const ownerIs = (owner: string) => onChain({ owner });
+const orgSafesOnChain1 = (...safeAddresses: string[]) => {
+  mockListOrgSafes.mockResolvedValue(
+    safeAddresses.map((safeAddress, index) => ({
+      chainId: 1,
+      id: `sw_${index}`,
+      organizationId: "org_1",
+      safeAddress,
+    }))
+  );
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -88,6 +72,7 @@ beforeEach(() => {
     kind: "eoa",
     ownerAddress: WALLET,
   });
+  mockListOrgSafes.mockResolvedValue([]);
 });
 
 // increaseLiquidity is the only position function Uniswap does not gate on
@@ -141,9 +126,10 @@ describe("uniswap increase-liquidity ownership guard", () => {
     expect((await increase({ tokenId: "180205" })).ok).toBe(true);
   });
 
-  // In safe mode the Safe is msg.sender at the position manager, so the Safe
-  // must hold the NFT - not the owner EOA behind it.
-  it("expects the Safe to own the position in safe mode", async () => {
+  // In safe mode the Safe is msg.sender at the position manager, so a position
+  // it holds needs no further check. A stranger's still fails - and note the
+  // EOA behind the Safe is a separate, allowed case, pinned further down.
+  it("accepts the signing Safe as holder in safe mode", async () => {
     mockResolveSignerForNode.mockResolvedValue({
       kind: "safe",
       ownerAddress: WALLET,
@@ -153,7 +139,7 @@ describe("uniswap increase-liquidity ownership guard", () => {
     ownerIs(SAFE);
     expect((await increase({ tokenId: "180205" })).ok).toBe(true);
 
-    ownerIs(WALLET);
+    ownerIs(STRANGER);
     expect((await increase({ tokenId: "180205" })).ok).toBe(false);
   });
 
@@ -170,40 +156,70 @@ describe("uniswap increase-liquidity ownership guard", () => {
     expect((await increase({ tokenId: "180205" })).ok).toBe(true);
   });
 
-  // The position manager gates every recovering call (decreaseLiquidity,
-  // collect, burn) on _isApprovedOrOwner, so an approved operator can withdraw
-  // what this step adds. Owner equality alone would block a legitimate,
-  // fully recoverable arrangement forever.
-  it("allows a position the wallet is the approved operator for", async () => {
-    onChain({ owner: STRANGER, approved: WALLET });
-
-    expect((await increase({ tokenId: "180205" })).ok).toBe(true);
-  });
-
-  it("allows a position whose owner approved the wallet for all", async () => {
-    onChain({ owner: STRANGER, approvedForAll: true });
-
-    expect((await increase({ tokenId: "180205" })).ok).toBe(true);
-  });
-
-  it("refuses, and says so, when the approvals cannot be read", async () => {
-    onChain({ owner: STRANGER, approvalsFail: true });
+  // An approval is granted by the holder to an address of their choosing, so
+  // a stranger can approve this org's wallet on a position they keep. Deciding
+  // on the approval would pass exactly the input this guard exists to refuse:
+  // the deposit lands in their position and they withdraw it, and they can
+  // revoke or transfer the NFT whenever they like. Only the holder's identity
+  // survives the holder acting against us.
+  it("refuses a stranger's position even when it approves this wallet", async () => {
+    ownerIs(STRANGER);
 
     const result = await increase({ tokenId: "180205" });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toContain("could not be read");
+      expect(result.error).toContain("not one of this organization's wallets");
     }
   });
 
-  // Previously a throw here returned ok, so any input that made signer
+  // The arrangement that motivated looking past owner equality: the EOA holds
+  // the position and the Safe signs. The org controls both, so the deposit is
+  // recoverable and this must not be refused.
+  it("allows a position held by the org EOA while the Safe signs", async () => {
+    mockResolveSignerForNode.mockResolvedValue({
+      kind: "safe",
+      ownerAddress: WALLET,
+      safeAddress: SAFE,
+      safeWalletId: "sw_1",
+    });
+    ownerIs(WALLET);
+
+    expect((await increase({ tokenId: "180205" })).ok).toBe(true);
+  });
+
+  it("allows a position held by another Safe of the same org", async () => {
+    const OTHER_SAFE = "0x2222222222222222222222222222222222222222";
+    orgSafesOnChain1(SAFE, OTHER_SAFE);
+    ownerIs(OTHER_SAFE);
+
+    expect((await increase({ tokenId: "180205" })).ok).toBe(true);
+  });
+
+  // Safes are per chain, so one on another chain says nothing about who holds
+  // this position here.
+  it("ignores an org Safe registered on a different chain", async () => {
+    mockListOrgSafes.mockResolvedValue([
+      {
+        chainId: 8453,
+        id: "sw_base",
+        organizationId: "org_1",
+        safeAddress: STRANGER,
+      },
+    ]);
+    ownerIs(STRANGER);
+
+    expect((await increase({ tokenId: "180205" })).ok).toBe(false);
+  });
+
+  // Previously a throw here returned ok, so anything that made signer
   // resolution fail switched the guard off. Failing to work out who signs is
-  // not evidence that the position is owned.
+  // not evidence that the position is owned. The error is one org-policy
+  // resolution can actually raise now that no connection value reaches it.
   it("refuses when the signer cannot be resolved", async () => {
     ownerIs(WALLET);
     mockResolveSignerForNode.mockRejectedValue(
-      new Error("Invalid web3Connection value 'x'")
+      new Error("No organization wallet found for organization org_1")
     );
 
     const result = await increase({ tokenId: "180205" });

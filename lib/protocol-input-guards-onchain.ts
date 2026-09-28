@@ -3,7 +3,12 @@ import "server-only";
 import { ErrorCategory, logSystemWarn } from "@/lib/logging";
 import type { ProtocolInputGuardResult } from "@/lib/protocol-input-guards";
 import { getProtocol, resolveContractAddress } from "@/lib/protocol-registry";
-import { resolveSignerForNode, SIGNER_MODE } from "@/lib/safe/signer-resolver";
+import { listOrgSafes } from "@/lib/safe/deployment";
+import {
+  resolveSignerForNode,
+  SIGNER_MODE,
+  type SignerMode,
+} from "@/lib/safe/signer-resolver";
 import { getErrorMessage } from "@/lib/utils";
 import { readContractCore } from "@/plugins/web3/steps/read-contract-core";
 
@@ -20,30 +25,13 @@ import { readContractCore } from "@/plugins/web3/steps/read-contract-core";
  * revert is reading the owner first.
  */
 
-const POSITION_AUTH_ABI = JSON.stringify([
+const OWNER_OF_ABI = JSON.stringify([
   {
     type: "function",
     name: "ownerOf",
     stateMutability: "view",
     inputs: [{ name: "tokenId", type: "uint256" }],
     outputs: [{ name: "owner", type: "address" }],
-  },
-  {
-    type: "function",
-    name: "getApproved",
-    stateMutability: "view",
-    inputs: [{ name: "tokenId", type: "uint256" }],
-    outputs: [{ name: "operator", type: "address" }],
-  },
-  {
-    type: "function",
-    name: "isApprovedForAll",
-    stateMutability: "view",
-    inputs: [
-      { name: "owner", type: "address" },
-      { name: "operator", type: "address" },
-    ],
-    outputs: [{ name: "approved", type: "bool" }],
   },
 ]);
 
@@ -65,7 +53,9 @@ type ProtocolOnchainGuardInput = {
 };
 
 /**
- * The address that will be msg.sender, matching writeContractCore's resolution.
+ * The signer the write will use, resolved the way writeContractCore resolves
+ * it. Returned whole rather than as one address because the guard needs both
+ * the sender and the owner EOA behind it.
  *
  * Deliberately resolves under org policy with no `web3Connection`. Neither
  * write this guard covers honours that field - the direct-execute route records
@@ -74,84 +64,52 @@ type ProtocolOnchainGuardInput = {
  * input - so reading it here would let the guard compute a sender the write
  * never uses.
  */
-async function resolveExecutingAddress(
+async function resolveExecutingSigner(
   organizationId: string,
-  network: string
-): Promise<string | undefined> {
-  const chainId = Number(network);
-  if (!Number.isFinite(chainId)) {
-    return undefined;
-  }
-  const signerMode = await resolveSignerForNode({
+  chainId: number
+): Promise<SignerMode> {
+  return await resolveSignerForNode({
     organizationId,
     chainId,
     web3Connection: undefined,
     recordMetrics: false,
   });
+}
+
+/** The address that is msg.sender at the position manager for this mode. */
+function senderOf(signerMode: SignerMode): string {
   // In safe and safe-role modes the Safe is msg.sender at the target, so it is
-  // the Safe that must hold the position, not the owner EOA.
+  // the Safe that transacts, not the owner EOA behind it.
   return signerMode.kind === SIGNER_MODE.EOA
     ? signerMode.ownerAddress
     : signerMode.safeAddress;
 }
 
 /**
- * Whether `expected` may act on the position without owning it, the way the
- * position manager's own `_isApprovedOrOwner` decides it: the single-token
- * approval, or blanket operator approval from the owner.
+ * Every address the organization itself controls on this chain: the owner EOA
+ * behind the signer (returned in all three modes) and the org's Safes.
  *
- * Returns undefined when neither could be read. That is not the same as "no":
- * the caller refuses either way here, since the owner is already known not to
- * match, but the message says which of the two it is.
+ * This is deliberately not an approval check. `approve` and `setApprovalForAll`
+ * are called by a position's owner naming whatever address they like, so a
+ * stranger can approve this org's wallet on a position they keep. Reading the
+ * approval would then answer "yes" for exactly the input the guard exists to
+ * refuse - a tokenId the org does not control - while the owner keeps the
+ * right to withdraw the deposit, revoke, or transfer the NFT away. Ownership
+ * by an org address is the only answer that survives the owner acting against
+ * us, and when it holds the deposit is recoverable with or without approvals.
  */
-async function isApprovedOperator(args: {
-  contractAddress: string;
-  executionId: string | undefined;
-  expected: string;
-  network: string;
-  owner: string;
-  tokenId: string;
-}): Promise<boolean | undefined> {
-  const call = async (abiFunction: string, functionArgs: unknown[]) =>
-    await readContractCore({
-      contractAddress: args.contractAddress,
-      network: args.network,
-      abi: POSITION_AUTH_ABI,
-      abiFunction,
-      functionArgs: JSON.stringify(functionArgs),
-      failOnError: false,
-      _context: { executionId: args.executionId },
-    });
-
-  const wanted = args.expected.toLowerCase();
-  // Both views have to answer before "not approved" is a fact. If either is
-  // unreadable the answer is unknown, not no.
-  let unreadable = false;
-
-  const approved = await call("getApproved", [args.tokenId]);
-  if (approved.success && approved.error === undefined) {
-    const operator = String(
-      (approved.result as { operator?: unknown } | null)?.operator ?? ""
-    )
-      .trim()
-      .toLowerCase();
-    if (operator !== "" && operator === wanted) {
-      return true;
+async function orgControlledAddresses(
+  organizationId: string,
+  chainId: number,
+  signerMode: SignerMode
+): Promise<Set<string>> {
+  const addresses = new Set<string>([signerMode.ownerAddress.toLowerCase()]);
+  for (const safe of await listOrgSafes(organizationId)) {
+    if (safe.chainId === chainId) {
+      addresses.add(safe.safeAddress.toLowerCase());
     }
-  } else {
-    unreadable = true;
   }
-
-  const forAll = await call("isApprovedForAll", [args.owner, args.expected]);
-  if (forAll.success && forAll.error === undefined) {
-    if ((forAll.result as { approved?: unknown } | null)?.approved === true) {
-      return true;
-    }
-  } else {
-    unreadable = true;
-  }
-
-  return unreadable ? undefined : false;
+  return addresses;
 }
 
 export async function checkProtocolOnchainGuards(
@@ -185,12 +143,15 @@ export async function checkProtocolOnchainGuards(
     return { ok: true };
   }
 
-  let expected: string | undefined;
+  const chainId = Number(input.network);
+  if (!Number.isFinite(chainId)) {
+    // Not a chain id the resolver can use; the encoder rejects it downstream.
+    return { ok: true };
+  }
+
+  let signerMode: SignerMode;
   try {
-    expected = await resolveExecutingAddress(
-      input.organizationId,
-      input.network
-    );
+    signerMode = await resolveExecutingSigner(input.organizationId, chainId);
   } catch (error) {
     // Not a pass. Failing to work out who signs is not evidence that the
     // position is owned, and swallowing it here would switch the guard off for
@@ -208,14 +169,16 @@ export async function checkProtocolOnchainGuards(
       error: `Could not determine which wallet will send this transaction, so the position's ownership cannot be checked: ${getErrorMessage(error)}`,
     };
   }
-  if (!expected) {
+
+  const sender = senderOf(signerMode);
+  if (!sender) {
     return { ok: true };
   }
 
   const read = await readContractCore({
     contractAddress,
     network: input.network,
-    abi: POSITION_AUTH_ABI,
+    abi: OWNER_OF_ABI,
     abiFunction: "ownerOf",
     functionArgs: JSON.stringify([tokenId]),
     failOnError: false,
@@ -262,36 +225,29 @@ export async function checkProtocolOnchainGuards(
   if (owner === "") {
     return { ok: true };
   }
-  if (owner.toLowerCase() === expected.toLowerCase()) {
+  if (owner.toLowerCase() === sender.toLowerCase()) {
     return { ok: true };
   }
 
-  // Owning the NFT is not the only arrangement that can get the liquidity back
-  // out. The position manager gates decreaseLiquidity, collect and burn on
-  // _isApprovedOrOwner, so an approved operator can withdraw everything this
-  // step adds. A position held by the org EOA with the Safe approved is
-  // legitimate and fully recoverable; refusing it on owner equality alone
-  // would block it permanently. Only reached on a mismatch, so the common
-  // path still costs one read.
-  const authorized = await isApprovedOperator({
-    contractAddress,
-    executionId: input.executionId,
-    expected,
-    network: input.network,
-    owner,
-    tokenId,
-  });
-  if (authorized === true) {
+  // The sender is not the holder. That is still fine when the holder is an
+  // address the org controls - the EOA holds the position and the Safe signs,
+  // or a second Safe of the org holds it - because the org can withdraw the
+  // deposit in every one of those arrangements. Anything else, including a
+  // position whose holder has approved this wallet, is refused: see
+  // orgControlledAddresses for why an approval proves nothing here. Only
+  // reached on a mismatch, so the common path still costs one read.
+  const orgAddresses = await orgControlledAddresses(
+    input.organizationId,
+    chainId,
+    signerMode
+  );
+  if (orgAddresses.has(owner.toLowerCase())) {
     return { ok: true };
   }
 
-  const qualifier =
-    authorized === undefined
-      ? " Its approvals could not be read, so this is refused rather than assumed."
-      : "";
   return {
     ok: false,
     field: "tokenId",
-    error: `Position ${tokenId} belongs to ${owner}, not to this workflow's wallet (${expected}), which is not an approved operator for it either.${qualifier} Uniswap does not check ownership on increaseLiquidity, so adding liquidity to it would deposit your tokens into someone else's position with no way to withdraw them.`,
+    error: `Position ${tokenId} belongs to ${owner}, which is not one of this organization's wallets (this step would send from ${sender}). Uniswap does not check ownership on increaseLiquidity, so adding liquidity to it would deposit your tokens into someone else's position with no way to withdraw them.`,
   };
 }

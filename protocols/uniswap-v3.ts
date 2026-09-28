@@ -217,7 +217,7 @@ const INCREASE_AMOUNT_TIP =
 // where it can, but that read fails open (see lib/protocol-input-guards-
 // onchain.ts), so the tip must not promise a check the user can rely on.
 const INCREASE_TOKEN_ID_TIP =
-  "The NFT token ID of the position to add liquidity to. Unlike the other position actions, Uniswap performs no ownership check on this one: a wrong ID deposits your tokens into someone else's position, succeeds, and cannot be undone. This action reads the position's owner first and refuses an ID your wallet does not own, but that read is skipped when the owner cannot be fetched, so verify the ID yourself against Get Position Details rather than relying on either the check or a revert.";
+  "The NFT token ID of the position to add liquidity to. Unlike the other position actions, Uniswap performs no ownership check on this one: a wrong ID deposits your tokens into someone else's position, succeeds, and cannot be undone. This action reads the position's owner first and refuses an ID your organization's wallets do not own, but that read is skipped when the owner cannot be fetched, so verify the ID yourself against Get Position Details rather than relying on either the check or a revert.";
 
 // Two deliberate divergences from upstream mutability in this file.
 //
