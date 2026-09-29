@@ -202,17 +202,20 @@ describe("Uniswap position lifecycle actions", () => {
 
   // Called directly rather than inside multicall, ETH sent to any of these
   // stays in the position manager for anyone to sweep with refundETH(), so
-  // none may offer an ETH Value field. burn carried the same hazard and is
-  // included.
-  it("makes no position-manager write payable", () => {
+  // none may offer an ETH Value field. burn-position is excluded on purpose:
+  // it ships today as payable and narrowing it would drop a stored ethValue.
+  it("makes no new position-manager write payable", () => {
     for (const slug of [
       "collect-fees",
       "decrease-liquidity",
       "increase-liquidity",
-      "burn-position",
     ]) {
       expect(action(slug).payable, `${slug} must not be payable`).toBeFalsy();
     }
+  });
+
+  it("leaves burn-position payable, as it ships today", () => {
+    expect(action("burn-position").payable).toBe(true);
   });
 
   // Slippage and deadline must stay required with no default. A default of

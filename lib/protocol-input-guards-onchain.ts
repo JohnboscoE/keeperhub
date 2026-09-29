@@ -1,6 +1,11 @@
 import "server-only";
 
-import { ErrorCategory, logSystemWarn } from "@/lib/logging";
+import {
+  ErrorCategory,
+  logSystemError,
+  logSystemWarn,
+  logUserError,
+} from "@/lib/logging";
 import type { ProtocolInputGuardResult } from "@/lib/protocol-input-guards";
 import { getProtocol, resolveContractAddress } from "@/lib/protocol-registry";
 import { listOrgSafes } from "@/lib/safe/deployment";
@@ -23,6 +28,12 @@ import { readContractCore } from "@/plugins/web3/steps/read-contract-core";
  * position the id names, the call reports a `liquidity` output, and the caller
  * has no claim on that NFT. The only thing that turns that silent loss into a
  * revert is reading the owner first.
+ *
+ * Because that deposit cannot be undone, every condition that leaves ownership
+ * unestablished refuses the write rather than passing it. The read and the
+ * write it guards resolve the same provider, so an outage that blinds the read
+ * is an outage the write is behind too: refusing costs a clearer error message,
+ * not a run that would otherwise have landed.
  */
 
 const OWNER_OF_ABI = JSON.stringify([
@@ -112,6 +123,11 @@ async function orgControlledAddresses(
   return addresses;
 }
 
+/** Every refusal here is about the token id, so the field never varies. */
+function refuse(error: string): ProtocolInputGuardResult {
+  return { ok: false, field: "tokenId", error };
+}
+
 export async function checkProtocolOnchainGuards(
   input: ProtocolOnchainGuardInput
 ): Promise<ProtocolInputGuardResult> {
@@ -143,10 +159,21 @@ export async function checkProtocolOnchainGuards(
     return { ok: true };
   }
 
+  const labels = { protocol: input.protocolSlug, function: input.functionName };
+
   const chainId = Number(input.network);
   if (!Number.isFinite(chainId)) {
-    // Not a chain id the resolver can use; the encoder rejects it downstream.
-    return { ok: true };
+    // Without a chain id the org's Safes cannot be matched, so no check is
+    // possible. The same value fails the write, so this only answers first.
+    logUserError(
+      ErrorCategory.VALIDATION,
+      "[Protocol Guard] Ownership check refused: unusable network",
+      input.network,
+      labels
+    );
+    return refuse(
+      `"${input.network}" is not a chain id this step can check position ownership on.`
+    );
   }
 
   let signerMode: SignerMode;
@@ -161,18 +188,25 @@ export async function checkProtocolOnchainGuards(
       ErrorCategory.CONFIGURATION,
       "[Protocol Guard] Could not resolve the signer for an ownership check",
       error,
-      { protocol: input.protocolSlug, function: input.functionName }
+      labels
     );
-    return {
-      ok: false,
-      field: "tokenId",
-      error: `Could not determine which wallet will send this transaction, so the position's ownership cannot be checked: ${getErrorMessage(error)}`,
-    };
+    return refuse(
+      `Could not determine which wallet will send this transaction, so the position's ownership cannot be checked: ${getErrorMessage(error)}`
+    );
   }
 
   const sender = senderOf(signerMode);
   if (!sender) {
-    return { ok: true };
+    // A mode with no address cannot be compared against a holder.
+    logSystemError(
+      ErrorCategory.CONFIGURATION,
+      "[Protocol Guard] Ownership check refused: signer has no address",
+      { kind: signerMode.kind },
+      labels
+    );
+    return refuse(
+      `The wallet that would send this transaction has no address, so ownership of position ${tokenId} cannot be checked.`
+    );
   }
 
   const read = await readContractCore({
@@ -200,20 +234,24 @@ export async function checkProtocolOnchainGuards(
   });
 
   if (!read.success || read.error !== undefined || read.result === null) {
-    // ownerOf reverts for an id that was never minted or has been burned,
-    // which is itself a wrong id - but an RPC outage lands here too and the
-    // two are not distinguishable from this result shape. Refusing on an
-    // outage would break every scheduled compound, so this passes and leaves
-    // the position manager to accept a deposit the tip warns about. Logged so
-    // the skips are countable: this is the guard being off, silently, on the
-    // one call that cannot be undone.
-    logSystemWarn(
+    // A revert for an unminted or burned id and a transport failure arrive in
+    // the same shape here: readContractCore funnels both through one catch and
+    // failOnError=false softens both to a null result carrying a message, so
+    // neither the shape nor errorClass separates them. Both refuse. A revert
+    // would have failed the write too, and the read and the write share a
+    // provider, so a transport failure is not a run this guard cost anyone.
+    // logUserError rather than logSystemWarn: this needs a Prometheus counter
+    // to alert on, and a mistyped id is not a Sentry error.
+    logUserError(
       ErrorCategory.NETWORK_RPC,
-      "[Protocol Guard] Ownership check skipped: position owner unreadable",
+      "[Protocol Guard] Ownership check refused: position owner unreadable",
       read.error ?? "no result",
-      { protocol: input.protocolSlug, function: input.functionName }
+      labels
     );
-    return { ok: true };
+    // The read message can carry a provider URL, so it stays in the log.
+    return refuse(
+      `Could not read who owns position ${tokenId}. Uniswap performs no ownership check on increaseLiquidity, so this step will not deposit into a position it cannot verify. Check the token ID against Get Position Details, then retry.`
+    );
   }
 
   // readContractCore runs results through structureAbiOutputs, which wraps a
@@ -223,7 +261,16 @@ export async function checkProtocolOnchainGuards(
     (read.result as { owner?: unknown } | null)?.owner ?? ""
   ).trim();
   if (owner === "") {
-    return { ok: true };
+    // A decoded result with no address is as unverified as a failed read.
+    logSystemError(
+      ErrorCategory.EXTERNAL_SERVICE,
+      "[Protocol Guard] Ownership check refused: ownerOf returned no address",
+      read.result,
+      labels
+    );
+    return refuse(
+      `Could not read who owns position ${tokenId}: the position manager returned no address. This step will not deposit into a position it cannot verify.`
+    );
   }
   if (owner.toLowerCase() === sender.toLowerCase()) {
     return { ok: true };
@@ -236,18 +283,31 @@ export async function checkProtocolOnchainGuards(
   // position whose holder has approved this wallet, is refused: see
   // orgControlledAddresses for why an approval proves nothing here. Only
   // reached on a mismatch, so the common path still costs one read.
-  const orgAddresses = await orgControlledAddresses(
-    input.organizationId,
-    chainId,
-    signerMode
-  );
+  let orgAddresses: Set<string>;
+  try {
+    orgAddresses = await orgControlledAddresses(
+      input.organizationId,
+      chainId,
+      signerMode
+    );
+  } catch (error) {
+    // The holder is already known not to be the sender, so an unreadable Safe
+    // list leaves the one question that could still clear it unanswered.
+    logSystemError(
+      ErrorCategory.DATABASE,
+      "[Protocol Guard] Ownership check refused: org wallets unreadable",
+      error,
+      labels
+    );
+    return refuse(
+      `Position ${tokenId} belongs to ${owner}, and this organization's wallets could not be listed to confirm whether that is one of them.`
+    );
+  }
   if (orgAddresses.has(owner.toLowerCase())) {
     return { ok: true };
   }
 
-  return {
-    ok: false,
-    field: "tokenId",
-    error: `Position ${tokenId} belongs to ${owner}, which is not one of this organization's wallets (this step would send from ${sender}). Uniswap does not check ownership on increaseLiquidity, so adding liquidity to it would deposit your tokens into someone else's position with no way to withdraw them.`,
-  };
+  return refuse(
+    `Position ${tokenId} belongs to ${owner}, which is not one of this organization's wallets (this step would send from ${sender}). Uniswap does not check ownership on increaseLiquidity, so adding liquidity to it would deposit your tokens into someone else's position with no way to withdraw them.`
+  );
 }

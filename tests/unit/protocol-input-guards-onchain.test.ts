@@ -14,8 +14,11 @@ const { mockListOrgSafes, mockReadContractCore, mockResolveSignerForNode } =
 vi.mock("@/plugins/web3/steps/read-contract-core", () => ({
   readContractCore: mockReadContractCore,
 }));
-vi.mock("@/lib/safe/signer-resolver", () => ({
-  SIGNER_MODE: { EOA: "eoa", SAFE: "safe", SAFE_ROLE: "safe-role" },
+// Only the resolver call is replaced. SIGNER_MODE comes through real, so the
+// branch picking the Safe over the EOA is compared against the enum the guard
+// actually imports rather than against a copy this file wrote.
+vi.mock("@/lib/safe/signer-resolver", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/safe/signer-resolver")>()),
   resolveSignerForNode: mockResolveSignerForNode,
 }));
 vi.mock("@/lib/safe/deployment", () => ({
@@ -24,6 +27,7 @@ vi.mock("@/lib/safe/deployment", () => ({
 
 import { checkProtocolOnchainGuards } from "@/lib/protocol-input-guards-onchain";
 import { registerProtocol } from "@/lib/protocol-registry";
+import { SIGNER_MODE } from "@/lib/safe/signer-resolver";
 import { structureAbiOutputs } from "@/plugins/web3/steps/structure-abi-result";
 import uniswapDef from "@/protocols/uniswap-v3";
 
@@ -31,29 +35,77 @@ const WALLET = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
 const SAFE = "0x1111111111111111111111111111111111111111";
 // Synthetic: this only has to be an address the wallet does not control.
 const STRANGER = "0x00000000000000000000000000000000000000a2";
+const ZERO = "0x0000000000000000000000000000000000000000";
 
-registerProtocol(uniswapDef);
+// The registry keys contract addresses by numeric chain id, so a named network
+// resolves no address and the guard exits before it ever parses a chain id.
+// This extra key is what lets a test reach that branch; every other case still
+// goes through the numeric "1" the real callers pass.
+registerProtocol({
+  ...uniswapDef,
+  contracts: {
+    ...uniswapDef.contracts,
+    positionManager: {
+      ...uniswapDef.contracts.positionManager,
+      addresses: {
+        ...uniswapDef.contracts.positionManager.addresses,
+        mainnet: uniswapDef.contracts.positionManager.addresses["1"],
+      },
+    },
+  },
+});
 
-const increase = (inputs: Record<string, unknown>, organizationId = "org_1") =>
+const increase = (
+  inputs: Record<string, unknown>,
+  overrides: { organizationId?: string; network?: string } = {}
+) =>
   checkProtocolOnchainGuards({
     protocolSlug: "uniswap",
     functionName: "increaseLiquidity",
     inputs,
-    network: "1",
-    organizationId,
+    network: overrides.network ?? "1",
+    organizationId:
+      "organizationId" in overrides ? overrides.organizationId : "org_1",
   });
 
 // Built with the real structureAbiOutputs rather than by hand: readContractCore
 // runs every result through it, and a single *named* output comes back as
 // { owner: value }. A hand-written bare string here is what let a guard that
 // compared "[object Object]" to an address pass its own tests.
-const ownerIs = (owner: string) => {
-  mockReadContractCore.mockResolvedValue({
-    success: true,
-    result: structureAbiOutputs([owner], [{ name: "owner", type: "address" }]),
-    addressLink: "",
+const abiResult = (name: string, type: string, value: unknown) => ({
+  success: true,
+  result: structureAbiOutputs([value], [{ name, type }]),
+  addressLink: "",
+});
+
+/**
+ * Answers the mocked read per ABI function rather than per call, so a guard
+ * that reads more than `ownerOf` gets that function's answer. The approval
+ * answers are the point: they let a case state "this position is approved to
+ * our wallet" as chain state, so re-adding an approval-honouring bypass
+ * changes a result instead of passing unnoticed.
+ */
+const onChain = (state: {
+  owner: string;
+  approvedTo?: string;
+  approvedForAll?: boolean;
+}) => {
+  mockReadContractCore.mockImplementation((call: { abiFunction: string }) => {
+    if (call.abiFunction === "getApproved") {
+      return Promise.resolve(
+        abiResult("operator", "address", state.approvedTo ?? ZERO)
+      );
+    }
+    if (call.abiFunction === "isApprovedForAll") {
+      return Promise.resolve(
+        abiResult("", "bool", state.approvedForAll === true)
+      );
+    }
+    return Promise.resolve(abiResult("owner", "address", state.owner));
   });
 };
+
+const ownerIs = (owner: string) => onChain({ owner });
 
 const orgSafesOnChain1 = (...safeAddresses: string[]) => {
   mockListOrgSafes.mockResolvedValue(
@@ -69,7 +121,7 @@ const orgSafesOnChain1 = (...safeAddresses: string[]) => {
 beforeEach(() => {
   vi.clearAllMocks();
   mockResolveSignerForNode.mockResolvedValue({
-    kind: "eoa",
+    kind: SIGNER_MODE.EOA,
     ownerAddress: WALLET,
   });
   mockListOrgSafes.mockResolvedValue([]);
@@ -131,7 +183,7 @@ describe("uniswap increase-liquidity ownership guard", () => {
   // EOA behind the Safe is a separate, allowed case, pinned further down.
   it("accepts the signing Safe as holder in safe mode", async () => {
     mockResolveSignerForNode.mockResolvedValue({
-      kind: "safe",
+      kind: SIGNER_MODE.SAFE,
       ownerAddress: WALLET,
       safeAddress: SAFE,
       safeWalletId: "sw_1",
@@ -143,34 +195,37 @@ describe("uniswap increase-liquidity ownership guard", () => {
     expect((await increase({ tokenId: "180205" })).ok).toBe(false);
   });
 
-  // A revert for a burned id and an RPC outage arrive in the same shape, and
-  // refusing on an outage would break every scheduled compound.
-  it("passes when the owner cannot be read", async () => {
-    mockReadContractCore.mockResolvedValue({
-      success: false,
-      error: "call reverted",
-      result: null,
-      addressLink: "",
-    });
-
-    expect((await increase({ tokenId: "180205" })).ok).toBe(true);
-  });
-
   // An approval is granted by the holder to an address of their choosing, so
   // a stranger can approve this org's wallet on a position they keep. Deciding
   // on the approval would pass exactly the input this guard exists to refuse:
   // the deposit lands in their position and they withdraw it, and they can
   // revoke or transfer the NFT whenever they like. Only the holder's identity
-  // survives the holder acting against us.
+  // survives the holder acting against us. The chain here answers both
+  // approval forms affirmatively, so honouring either one fails this case.
   it("refuses a stranger's position even when it approves this wallet", async () => {
-    ownerIs(STRANGER);
+    onChain({ owner: STRANGER, approvedTo: WALLET, approvedForAll: true });
 
     const result = await increase({ tokenId: "180205" });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("not one of this organization's wallets");
+      expect(result.error).toContain(STRANGER);
     }
+  });
+
+  // The same, one layer along: the Safe signs and the stranger has approved
+  // the Safe rather than the EOA behind it.
+  it("refuses a stranger's position approved to the signing Safe", async () => {
+    mockResolveSignerForNode.mockResolvedValue({
+      kind: SIGNER_MODE.SAFE,
+      ownerAddress: WALLET,
+      safeAddress: SAFE,
+      safeWalletId: "sw_1",
+    });
+    onChain({ owner: STRANGER, approvedTo: SAFE, approvedForAll: true });
+
+    expect((await increase({ tokenId: "180205" })).ok).toBe(false);
   });
 
   // The arrangement that motivated looking past owner equality: the EOA holds
@@ -178,7 +233,7 @@ describe("uniswap increase-liquidity ownership guard", () => {
   // recoverable and this must not be refused.
   it("allows a position held by the org EOA while the Safe signs", async () => {
     mockResolveSignerForNode.mockResolvedValue({
-      kind: "safe",
+      kind: SIGNER_MODE.SAFE,
       ownerAddress: WALLET,
       safeAddress: SAFE,
       safeWalletId: "sw_1",
@@ -271,5 +326,124 @@ describe("uniswap increase-liquidity ownership guard", () => {
       ).ok
     ).toBe(true);
     expect(mockReadContractCore).not.toHaveBeenCalled();
+  });
+});
+
+// Nothing below establishes who holds the position. The deposit cannot be
+// undone and the read shares a provider with the write it guards, so every one
+// of these refuses rather than letting the position manager take the tokens.
+describe("increase-liquidity ownership guard when ownership is unknown", () => {
+  // failOnError=false softens a reverted or timed-out call to this shape: a
+  // success carrying a message and a null result. A burned id and a 429 are
+  // the same shape here, which is why both refuse.
+  it("refuses when the read is softened to a null result", async () => {
+    mockReadContractCore.mockResolvedValue({
+      success: true,
+      result: null,
+      addressLink: "",
+      error: "Contract call failed: execution reverted",
+    });
+
+    const result = await increase({ tokenId: "180205" });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.field).toBe("tokenId");
+      expect(result.error).toContain("Could not read who owns position 180205");
+    }
+  });
+
+  // The destination failures keep success=false: an unresolvable RPC config is
+  // the transport being down outright.
+  it("refuses when the read fails outright", async () => {
+    mockReadContractCore.mockResolvedValue({
+      success: false,
+      destinationError: true,
+      error: "Failed to resolve RPC config",
+    });
+
+    expect((await increase({ tokenId: "180205" })).ok).toBe(false);
+  });
+
+  // The provider URL in a read error is not repeated to the caller.
+  it("keeps the read's own message out of the refusal", async () => {
+    mockReadContractCore.mockResolvedValue({
+      success: true,
+      result: null,
+      addressLink: "",
+      error: "Contract call failed: https://rpc.example/secret-key timed out",
+    });
+
+    const result = await increase({ tokenId: "180205" });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).not.toContain("rpc.example");
+    }
+  });
+
+  it("refuses when ownerOf decodes to no address", async () => {
+    mockReadContractCore.mockResolvedValue(abiResult("owner", "address", ""));
+
+    const result = await increase({ tokenId: "180205" });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("returned no address");
+    }
+  });
+
+  // Safe mode with no Safe address leaves nothing to compare the holder
+  // against, so the check cannot run.
+  it("refuses when the resolved signer has no address", async () => {
+    mockResolveSignerForNode.mockResolvedValue({
+      kind: SIGNER_MODE.SAFE,
+      ownerAddress: WALLET,
+      safeAddress: "",
+      safeWalletId: "sw_1",
+    });
+    ownerIs(WALLET);
+
+    const result = await increase({ tokenId: "180205" });
+
+    expect(result.ok).toBe(false);
+    expect(mockReadContractCore).not.toHaveBeenCalled();
+  });
+
+  // Without a chain id the org's Safes cannot be matched to this chain.
+  it("refuses a network that is not a chain id", async () => {
+    ownerIs(WALLET);
+
+    const result = await increase(
+      { tokenId: "180205" },
+      { network: "mainnet" }
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("not a chain id");
+    }
+    expect(mockReadContractCore).not.toHaveBeenCalled();
+  });
+
+  // The holder is already known not to be the sender at this point, so an
+  // unreadable Safe list leaves the one question that could clear it open.
+  it("refuses when the org's Safes cannot be listed", async () => {
+    ownerIs(STRANGER);
+    mockListOrgSafes.mockRejectedValue(new Error("connection terminated"));
+
+    const result = await increase({ tokenId: "180205" });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("could not be listed");
+    }
+  });
+
+  // A readable, org-owned position is unaffected by any of the above.
+  it("still allows a position the org holds", async () => {
+    ownerIs(WALLET);
+
+    expect((await increase({ tokenId: "180205" })).ok).toBe(true);
   });
 });

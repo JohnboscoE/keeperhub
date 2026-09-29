@@ -83,13 +83,16 @@ vi.mock("@/lib/rpc/provider-factory", () => ({
   isSolanaChain: () => false,
 }));
 
-vi.mock("@/lib/safe/signer-resolver", () => ({
-  SIGNER_MODE: { EOA: "eoa", SAFE: "safe", SAFE_ROLE: "safe-role" },
+// SIGNER_MODE comes through real so the guard compares against the enum it
+// imports, not a copy this file wrote.
+vi.mock("@/lib/safe/signer-resolver", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/safe/signer-resolver")>()),
   resolveSignerForNode: mockResolveSignerForNode,
 }));
 
 import { checkProtocolOnchainGuards } from "@/lib/protocol-input-guards-onchain";
 import { registerProtocol } from "@/lib/protocol-registry";
+import { SIGNER_MODE } from "@/lib/safe/signer-resolver";
 import uniswapDef from "@/protocols/uniswap-v3";
 
 registerProtocol(uniswapDef);
@@ -107,7 +110,7 @@ const increase = (executionId: string | undefined) =>
 beforeEach(() => {
   vi.clearAllMocks();
   mockResolveSignerForNode.mockResolvedValue({
-    kind: "eoa",
+    kind: SIGNER_MODE.EOA,
     ownerAddress: "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",
   });
   // Stop at provider selection: everything this file asserts has happened by

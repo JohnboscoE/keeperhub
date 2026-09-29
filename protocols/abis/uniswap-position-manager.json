@@ -57,7 +57,7 @@
   {
     "type": "function",
     "name": "burn",
-    "stateMutability": "nonpayable",
+    "stateMutability": "payable",
     "inputs": [{ "name": "tokenId", "type": "uint256" }],
     "outputs": []
   },
