@@ -228,15 +228,22 @@ const INCREASE_TOKEN_ID_TIP =
 // cannot express "off-chain simulation"; this is the cleanest place to bridge
 // that gap until AbiFunctionOverride supports a stateMutability override.
 //
-// NonfungiblePositionManager burn / collect / decreaseLiquidity /
-// increaseLiquidity: upstream they are `payable` only so they can be batched
-// inside `multicall` alongside a WETH wrap or `refundETH`. Called directly, as
-// these actions do, any ETH sent stays in the position manager, and its public
-// `refundETH()` pays the whole balance to whoever calls it next. A `payable`
-// ABI would show an ETH Value field whose every non-zero use hands that ETH to
-// a stranger, so all four are declared `nonpayable` here. Mutability does not
-// enter the selector or the encoding; the calldata is identical. `burn` was
-// payable before this change and carried the same hazard.
+// NonfungiblePositionManager collect / decreaseLiquidity / increaseLiquidity:
+// upstream they are `payable` only so they can be batched inside `multicall`
+// alongside a WETH wrap or `refundETH`. Called directly, as these actions do,
+// any ETH sent stays in the position manager, and its public `refundETH()`
+// pays the whole balance to whoever calls it next. A `payable` ABI would show
+// an ETH Value field whose every non-zero use hands that ETH to a stranger, so
+// these three are declared `nonpayable` here. Mutability does not enter the
+// selector or the encoding; the calldata is identical.
+//
+// `burn` carries the same hazard but stays `payable`, matching upstream and
+// the shipped action. Narrowing it would break callers that exist today: an
+// API caller posting `ethValue` to burn-position would be refused outright,
+// and a saved node carrying one would have it dropped silently. The hazard is
+// a value-level concern, not a mutability one - the place to refuse a non-zero
+// ethValue on burn is lib/protocol-input-guards.ts, where a message can say
+// why.
 
 export default defineAbiProtocol({
   name: "Uniswap V3",

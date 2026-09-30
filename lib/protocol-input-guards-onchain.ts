@@ -307,7 +307,17 @@ export async function checkProtocolOnchainGuards(
     return { ok: true };
   }
 
+  // The dominant refusal, and the only one that was not counted: a mistyped or
+  // templated id naming a position the org does not hold. logUserError like the
+  // unreadable-owner case above, so holder refusals show on the same counter
+  // and a spike is visible rather than inferred from support tickets.
+  logUserError(
+    ErrorCategory.VALIDATION,
+    "[Protocol Guard] Ownership check refused: position held outside the organization",
+    undefined,
+    labels
+  );
   return refuse(
-    `Position ${tokenId} belongs to ${owner}, which is not one of this organization's wallets (this step would send from ${sender}). Uniswap does not check ownership on increaseLiquidity, so adding liquidity to it would deposit your tokens into someone else's position with no way to withdraw them.`
+    `Position ${tokenId} belongs to ${owner}, which is not one of this organization's wallets (this step would send from ${sender}). Uniswap does not check ownership on increaseLiquidity, so adding liquidity to it would deposit your tokens into someone else's position with no way to withdraw them. If the position is yours, transfer the NFT to ${sender} or another of the organization's wallets and this step will accept it.`
   );
 }
