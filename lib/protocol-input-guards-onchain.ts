@@ -36,17 +36,33 @@ import { readContractCore } from "@/plugins/web3/steps/read-contract-core";
  * not a run that would otherwise have landed.
  */
 
-const OWNER_OF_ABI = JSON.stringify([
-  {
-    type: "function",
-    name: "ownerOf",
-    stateMutability: "view",
-    inputs: [{ name: "tokenId", type: "uint256" }],
-    outputs: [{ name: "owner", type: "address" }],
-  },
-]);
+// Both spellings the encoder accepts for a uint256. ethers takes either, and
+// "0x2bfed" and "180205" produce byte-identical calldata, so a guard that
+// recognised only decimal could be stepped around by rewriting the same id in
+// hex - and the hex form reaches here from the direct-execute body untouched,
+// or from a template that renders one.
+const DECIMAL_TOKEN_ID = /^\d+$/;
+// `0X` as well as `0x`: ethers accepts both, and a guard narrower than the
+// encoder is the same mismatch in the other direction - it would refuse a
+// write the encoder performs happily.
+const HEX_TOKEN_ID = /^0[xX][0-9a-fA-F]+$/;
 
-const DIGITS = /^\d+$/;
+/**
+ * The token id as the encoder will read it, in decimal, or undefined when it
+ * is neither spelling. Normalising here means the `ownerOf` read asks about
+ * the position the write will actually touch, whichever form the caller sent.
+ */
+function normalizeTokenId(raw: unknown): string | undefined {
+  const value = String(raw ?? "").trim();
+  if (!(DECIMAL_TOKEN_ID.test(value) || HEX_TOKEN_ID.test(value))) {
+    return undefined;
+  }
+  try {
+    return BigInt(value).toString();
+  } catch {
+    return undefined;
+  }
+}
 
 type ProtocolOnchainGuardInput = {
   protocolSlug: string;
@@ -138,14 +154,27 @@ export async function checkProtocolOnchainGuards(
     return { ok: true };
   }
 
+  const labels = { protocol: input.protocolSlug, function: input.functionName };
+
   // Not `typeof raw === "string"`: a JSON body carries `"tokenId": 180205` as a
   // number, and the direct-execute route passes the body through untouched, so
   // narrowing to strings would skip the read for exactly the caller this guard
   // exists to stop. A template rendering to a native value lands the same way.
-  const tokenId = String(input.inputs.tokenId ?? "").trim();
-  // A malformed id is the encoder's to reject, with its own message.
-  if (!DIGITS.test(tokenId)) {
-    return { ok: true };
+  const tokenId = normalizeTokenId(input.inputs.tokenId);
+  if (tokenId === undefined) {
+    // Not the encoder's to reject after all: it takes decimal and hex alike
+    // and has no numeric format check before it, so passing an unparseable id
+    // through would leave the deposit unguarded on the strength of a premise
+    // that does not hold.
+    logUserError(
+      ErrorCategory.VALIDATION,
+      "[Protocol Guard] Ownership check refused: unusable token id",
+      String(input.inputs.tokenId ?? ""),
+      labels
+    );
+    return refuse(
+      `"${String(input.inputs.tokenId ?? "")}" is not a position token ID. Give the ID as a decimal number (180205) or hex (0x2bfed).`
+    );
   }
 
   const protocol = getProtocol(input.protocolSlug);
@@ -153,13 +182,36 @@ export async function checkProtocolOnchainGuards(
   const contractAddress = contract
     ? resolveContractAddress(contract, input.network, undefined)
     : undefined;
-  if (!(contractAddress && input.organizationId)) {
-    // No registry address or no org context (direct tooling): nothing to
-    // compare against. The cheap guards and the encoder still apply.
-    return { ok: true };
+  // The registry's own ABI rather than a local copy of ownerOf: one
+  // declaration, so a later correction to the shared file reaches the guard.
+  const abi = contract?.abi;
+  if (!(contractAddress && abi)) {
+    logSystemWarn(
+      ErrorCategory.CONFIGURATION,
+      "[Protocol Guard] Ownership check refused: no position manager for this chain",
+      input.network,
+      labels
+    );
+    return refuse(
+      `No Uniswap position manager is registered for chain ${input.network}, so this step cannot check who owns position ${tokenId}.`
+    );
   }
-
-  const labels = { protocol: input.protocolSlug, function: input.functionName };
+  if (!input.organizationId) {
+    // Unreachable from either route today - both pass an organization - but
+    // WorkflowExecutionInput types it optional, so one caller that omits it
+    // would otherwise turn this guard off for every increaseLiquidity in the
+    // run. Refusing keeps the header's promise: nothing deposits into a
+    // position whose holder was never established.
+    logSystemWarn(
+      ErrorCategory.CONFIGURATION,
+      "[Protocol Guard] Ownership check refused: no organization context",
+      undefined,
+      labels
+    );
+    return refuse(
+      `This step cannot check who owns position ${tokenId} without an organization context, and Uniswap performs no ownership check of its own on increaseLiquidity.`
+    );
+  }
 
   const chainId = Number(input.network);
   if (!Number.isFinite(chainId)) {
@@ -212,7 +264,7 @@ export async function checkProtocolOnchainGuards(
   const read = await readContractCore({
     contractAddress,
     network: input.network,
-    abi: OWNER_OF_ABI,
+    abi,
     abiFunction: "ownerOf",
     functionArgs: JSON.stringify([tokenId]),
     failOnError: false,

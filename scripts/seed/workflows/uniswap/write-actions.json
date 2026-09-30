@@ -31,7 +31,7 @@
       },
       "data": {
         "label": "Swap Exact Input",
-        "description": "Swap exact input tokens (Sepolia)",
+        "description": "Swap exact input tokens (Sepolia). Recipient is left blank on purpose so this step will not run until you set the wallet that should receive the tokens.",
         "type": "action",
         "config": {
           "actionType": "uniswap/swap-exact-input",
@@ -56,7 +56,7 @@
       },
       "data": {
         "label": "Swap Exact Output",
-        "description": "Swap for exact output tokens (Sepolia)",
+        "description": "Swap for exact output tokens (Sepolia). Recipient is left blank on purpose so this step will not run until you set the wallet that should receive the tokens.",
         "type": "action",
         "config": {
           "actionType": "uniswap/swap-exact-output",

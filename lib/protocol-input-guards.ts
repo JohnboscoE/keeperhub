@@ -16,12 +16,12 @@
 import { ethers } from "ethers";
 
 import { getProtocol } from "@/lib/protocol-registry";
+import { ZERO_ADDRESS } from "@/lib/web3/address";
 
 export type ProtocolInputGuardResult =
   | { ok: true }
   | { ok: false; error: string; field: string };
 
-const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 // Uppercase hex prefix: valid hex a user may paste, which getAddress rejects.
 const UPPERCASE_HEX_PREFIX = /^0X/;
 

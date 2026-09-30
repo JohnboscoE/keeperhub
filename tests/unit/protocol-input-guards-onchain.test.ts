@@ -297,7 +297,7 @@ describe("uniswap increase-liquidity ownership guard", () => {
     );
   });
 
-  it("does not call the chain for other functions, malformed ids, or no org", async () => {
+  it("does not call the chain for other protocol functions", async () => {
     ownerIs(STRANGER);
 
     expect(
@@ -311,20 +311,61 @@ describe("uniswap increase-liquidity ownership guard", () => {
         })
       ).ok
     ).toBe(true);
-    expect((await increase({ tokenId: "not-a-number" })).ok).toBe(true);
+    expect(mockReadContractCore).not.toHaveBeenCalled();
+  });
+
+  // ethers takes decimal and hex alike for a uint256, and both spellings of
+  // one id encode to identical calldata - 0x2bfed is 180205. Nothing between
+  // the body and the encoder rejects hex, so a guard that recognised only
+  // decimal could be stepped around by rewriting the id.
+  it("checks a hex token id against the same position", async () => {
+    ownerIs(STRANGER);
+
+    const result = await increase({ tokenId: "0x2bfed" });
+
+    expect(result.ok).toBe(false);
+    expect(mockReadContractCore).toHaveBeenCalledWith(
+      // Normalised to decimal, so the read asks about the position the write
+      // will touch rather than about the spelling it arrived in.
+      expect.objectContaining({ functionArgs: JSON.stringify(["180205"]) })
+    );
+  });
+
+  it("allows a hex token id the organization holds", async () => {
+    ownerIs(WALLET);
+
+    expect((await increase({ tokenId: "0X2BFED" })).ok).toBe(true);
+  });
+
+  // Previously passed through on the premise that the encoder would reject it.
+  // It would not: validate-args only checks for empty values, so an id that is
+  // neither spelling would have reached the chain unguarded.
+  it("refuses an id that is neither decimal nor hex", async () => {
+    ownerIs(STRANGER);
+
+    for (const tokenId of ["not-a-number", "0x", "12.5", "0xzz", ""]) {
+      expect((await increase({ tokenId })).ok, tokenId).toBe(false);
+    }
+    expect(mockReadContractCore).not.toHaveBeenCalled();
+  });
+
+  // Unreachable from either route today, but WorkflowExecutionInput types the
+  // organization optional, so a caller that omits it would otherwise switch
+  // the guard off for every increaseLiquidity in that run.
+  it("refuses when there is no organization context", async () => {
+    ownerIs(STRANGER);
+
     // Passed directly: an explicit `undefined` argument would still take the
     // helper's default, which is the opposite of what this case checks.
-    expect(
-      (
-        await checkProtocolOnchainGuards({
-          protocolSlug: "uniswap",
-          functionName: "increaseLiquidity",
-          inputs: { tokenId: "180205" },
-          network: "1",
-          organizationId: undefined,
-        })
-      ).ok
-    ).toBe(true);
+    const result = await checkProtocolOnchainGuards({
+      protocolSlug: "uniswap",
+      functionName: "increaseLiquidity",
+      inputs: { tokenId: "180205" },
+      network: "1",
+      organizationId: undefined,
+    });
+
+    expect(result.ok).toBe(false);
     expect(mockReadContractCore).not.toHaveBeenCalled();
   });
 });
