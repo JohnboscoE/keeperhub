@@ -96,8 +96,7 @@ const abiResult = (
 });
 
 /** The one read the guard actually issues, shaped by the ABI it issues it with. */
-const ownerResult = (owner: string) =>
-  abiResult(outputsOf("ownerOf"), owner);
+const ownerResult = (owner: string) => abiResult(outputsOf("ownerOf"), owner);
 
 /**
  * Answers the mocked read per ABI function rather than per call, so a guard
