@@ -306,12 +306,19 @@ export async function checkProtocolOnchainGuards(
     );
   }
 
-  // readContractCore runs results through structureAbiOutputs, which wraps a
-  // single *named* output as { owner: value } - so the value is behind the
-  // ABI's output name, not the result itself.
-  const owner = String(
-    (read.result as { owner?: unknown } | null)?.owner ?? ""
-  ).trim();
+  // structureAbiOutputs wraps a single output in an object only when the ABI
+  // names it, and the shared ABI declares ownerOf's output as "" - so what
+  // comes back here is the bare address. Both shapes are read, rather than
+  // the one the current ABI happens to produce: naming that output would
+  // change the shipped uniswap/owner-of action's result from an address to an
+  // object and break workflows templating off it, so the ABI must stay as it
+  // is and this has to tolerate either.
+  const result = read.result;
+  const ownerValue =
+    result !== null && typeof result === "object" && "owner" in result
+      ? (result as { owner?: unknown }).owner
+      : result;
+  const owner = String(ownerValue ?? "").trim();
   if (owner === "") {
     // A decoded result with no address is as unverified as a failed read.
     logSystemError(

@@ -68,15 +68,36 @@ const increase = (
       "organizationId" in overrides ? overrides.organizationId : "org_1",
   });
 
-// Built with the real structureAbiOutputs rather than by hand: readContractCore
-// runs every result through it, and a single *named* output comes back as
-// { owner: value }. A hand-written bare string here is what let a guard that
-// compared "[object Object]" to an address pass its own tests.
-const abiResult = (name: string, type: string, value: unknown) => ({
+// Output descriptors come from the ABI under test, not from hand-written
+// ones. readContractCore runs every result through structureAbiOutputs, and
+// whether a single output is wrapped as { name: value } or returned bare
+// depends on whether the ABI names it. A fixture that invented the name
+// `owner` is what let a guard reading `.owner` pass its own suite while
+// refusing every real call, because the shared ABI declares that output as "".
+const POSITION_MANAGER_ABI = JSON.parse(
+  uniswapDef.contracts.positionManager.abi as string
+) as Array<{ name?: string; outputs?: { name: string; type: string }[] }>;
+
+const outputsOf = (fn: string): { name: string; type: string }[] => {
+  const entry = POSITION_MANAGER_ABI.find((e) => e.name === fn);
+  if (!entry?.outputs) {
+    throw new Error(`ABI under test declares no outputs for ${fn}`);
+  }
+  return entry.outputs;
+};
+
+const abiResult = (
+  outputs: { name: string; type: string }[],
+  value: unknown
+) => ({
   success: true,
-  result: structureAbiOutputs([value], [{ name, type }]),
+  result: structureAbiOutputs([value], outputs),
   addressLink: "",
 });
+
+/** The one read the guard actually issues, shaped by the ABI it issues it with. */
+const ownerResult = (owner: string) =>
+  abiResult(outputsOf("ownerOf"), owner);
 
 /**
  * Answers the mocked read per ABI function rather than per call, so a guard
@@ -91,17 +112,24 @@ const onChain = (state: {
   approvedForAll?: boolean;
 }) => {
   mockReadContractCore.mockImplementation((call: { abiFunction: string }) => {
+    // The shared ABI declares neither approval view - the guard does not read
+    // them - so these descriptors stay literal. They exist so that a bypass
+    // reading an approval finds chain state to act on and changes a result,
+    // rather than silently finding nothing.
     if (call.abiFunction === "getApproved") {
       return Promise.resolve(
-        abiResult("operator", "address", state.approvedTo ?? ZERO)
+        abiResult(
+          [{ name: "operator", type: "address" }],
+          state.approvedTo ?? ZERO
+        )
       );
     }
     if (call.abiFunction === "isApprovedForAll") {
       return Promise.resolve(
-        abiResult("", "bool", state.approvedForAll === true)
+        abiResult([{ name: "", type: "bool" }], state.approvedForAll === true)
       );
     }
-    return Promise.resolve(abiResult("owner", "address", state.owner));
+    return Promise.resolve(ownerResult(state.owner));
   });
 };
 
@@ -424,7 +452,7 @@ describe("increase-liquidity ownership guard when ownership is unknown", () => {
   });
 
   it("refuses when ownerOf decodes to no address", async () => {
-    mockReadContractCore.mockResolvedValue(abiResult("owner", "address", ""));
+    mockReadContractCore.mockResolvedValue(ownerResult(""));
 
     const result = await increase({ tokenId: "180205" });
 

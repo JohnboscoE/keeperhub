@@ -31,7 +31,7 @@
       },
       "data": {
         "label": "Swap Exact Input",
-        "description": "Swap exact input tokens (Sepolia). Recipient is left blank on purpose so this step will not run until you set the wallet that should receive the tokens.",
+        "description": "Swap exact input tokens (Sepolia)",
         "type": "action",
         "config": {
           "actionType": "uniswap/swap-exact-input",
@@ -39,7 +39,7 @@
           "tokenIn": "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14",
           "tokenOut": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
           "fee": "3000",
-          "recipient": "",
+          "recipient": "0x0000000000000000000000000000000000000001",
           "amountIn": "1000000000000000",
           "amountOutMinimum": "0",
           "sqrtPriceLimitX96": "0"
@@ -56,7 +56,7 @@
       },
       "data": {
         "label": "Swap Exact Output",
-        "description": "Swap for exact output tokens (Sepolia). Recipient is left blank on purpose so this step will not run until you set the wallet that should receive the tokens.",
+        "description": "Swap for exact output tokens (Sepolia)",
         "type": "action",
         "config": {
           "actionType": "uniswap/swap-exact-output",
@@ -64,7 +64,7 @@
           "tokenIn": "0xfFf9976782d46CC05630D1f6eBAb18b2324d6B14",
           "tokenOut": "0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238",
           "fee": "3000",
-          "recipient": "",
+          "recipient": "0x0000000000000000000000000000000000000001",
           "amountOut": "1000000",
           "amountInMaximum": "1000000000000000000",
           "sqrtPriceLimitX96": "0"
@@ -186,12 +186,12 @@
       },
       "data": {
         "label": "Increase Liquidity",
-        "description": "Add liquidity to a position (Sepolia). Testnet placeholders: zero minimums and a far deadline are unsafe on mainnet - use a real minimum from a recent price and a short deadline you refresh.",
+        "description": "Add liquidity to a position (Sepolia). Token ID is left blank on purpose: this step refuses a position your organization's wallets do not hold, so set one of your own. Testnet placeholders: zero minimums and a far deadline are unsafe on mainnet - use a real minimum from a recent price and a short deadline you refresh.",
         "type": "action",
         "config": {
           "actionType": "uniswap/increase-liquidity",
           "network": "11155111",
-          "tokenId": "1",
+          "tokenId": "",
           "amount0Desired": "1000000",
           "amount1Desired": "1000000000000000",
           "amount0Min": "0",

@@ -158,7 +158,8 @@ describe("buildProtocolFunctionArgs", () => {
       { asset: "0xToken" },
       "test-protocol",
       "pool",
-      "supply"
+      "supply",
+      "1"
     );
 
     expect(result).toEqual({
@@ -184,7 +185,8 @@ describe("buildProtocolFunctionArgs", () => {
       { asset: "0xToken", amount: "1000" },
       "test-protocol",
       "pool",
-      "supply"
+      "supply",
+      "1"
     );
 
     expect(result).toEqual({
@@ -215,7 +217,8 @@ describe("buildProtocolFunctionArgs", () => {
       },
       "test-protocol",
       "pool",
-      "supply"
+      "supply",
+      "1"
     );
 
     expect(result).toEqual({
@@ -240,7 +243,8 @@ describe("buildProtocolFunctionArgs", () => {
       { asset: "0xToken", amount: null },
       "test-protocol",
       "pool",
-      "supply"
+      "supply",
+      "1"
     );
 
     expect(result).toEqual({
@@ -265,7 +269,8 @@ describe("buildProtocolFunctionArgs", () => {
       { asset: "0xToken" },
       "test-protocol",
       "pool",
-      "supply"
+      "supply",
+      "1"
     );
 
     expect(result).toEqual({
@@ -290,7 +295,8 @@ describe("buildProtocolFunctionArgs", () => {
       { asset: "0xToken" },
       "test-protocol",
       "pool",
-      "supply"
+      "supply",
+      "1"
     );
 
     expect(result).toEqual({
@@ -318,7 +324,8 @@ describe("buildProtocolFunctionArgs", () => {
       },
       "uniswap",
       "positionManager",
-      "decreaseLiquidity"
+      "decreaseLiquidity",
+      "1"
     );
     expect(decrease.ok).toBe(false);
     if (!decrease.ok) {
@@ -335,7 +342,8 @@ describe("buildProtocolFunctionArgs", () => {
       },
       "uniswap",
       "positionManager",
-      "increaseLiquidity"
+      "increaseLiquidity",
+      "1"
     );
     expect(increase.ok).toBe(false);
     if (!increase.ok) {
@@ -356,7 +364,8 @@ describe("buildProtocolFunctionArgs", () => {
       {},
       "test-protocol",
       "pool",
-      "supply"
+      "supply",
+      "1"
     );
 
     expect(result).toEqual({ ok: true, functionArgs: undefined });
@@ -374,7 +383,8 @@ describe("buildProtocolFunctionArgs", () => {
       { path: ["0xA", "0xB"] },
       "test-protocol",
       "pool",
-      "supply"
+      "supply",
+      "1"
     );
 
     expect(result).toEqual({
@@ -401,7 +411,8 @@ describe("buildProtocolFunctionArgs", () => {
       { requestIds: ["135184"], hints: ["1216"] },
       "test-protocol",
       "pool",
-      "supply"
+      "supply",
+      "1"
     );
 
     expect(result).toEqual({
@@ -422,7 +433,8 @@ describe("buildProtocolFunctionArgs", () => {
       { requestIds: '["135184","135185"]' },
       "test-protocol",
       "pool",
-      "supply"
+      "supply",
+      "1"
     );
 
     expect(result).toEqual({
@@ -443,7 +455,8 @@ describe("buildProtocolFunctionArgs", () => {
       { gauges: "0x1F98431c8aD98523631AE4a59f267346ea31F984" },
       "test-protocol",
       "pool",
-      "supply"
+      "supply",
+      "1"
     );
 
     expect(result).toEqual({
@@ -468,7 +481,8 @@ describe("buildProtocolFunctionArgs", () => {
       {},
       "test-protocol",
       "pool",
-      "supply"
+      "supply",
+      "1"
     );
 
     expect(result).toEqual({

@@ -124,7 +124,8 @@ describe("direct-execute route arguments", () => {
       { tokenId: "1", recipient: ZERO, amount0Max: "1", amount1Max: "1" },
       "uniswap",
       "positionManager",
-      "collect"
+      "collect",
+      "1"
     );
 
     expect(result.ok).toBe(false);
@@ -138,7 +139,8 @@ describe("direct-execute route arguments", () => {
       { tokenId: "1", recipient: WALLET, amount0Max: "1", amount1Max: "1" },
       "uniswap",
       "positionManager",
-      "collect"
+      "collect",
+      "1"
     );
 
     expect(result.ok).toBe(true);

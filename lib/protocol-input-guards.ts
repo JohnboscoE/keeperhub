@@ -13,8 +13,7 @@
  * loses funds or silently does something other than what the field says.
  */
 
-import { ethers } from "ethers";
-
+import { normalizeAddressForStorage } from "@/lib/address-utils";
 import { getProtocol } from "@/lib/protocol-registry";
 import { ZERO_ADDRESS } from "@/lib/web3/address";
 
@@ -40,7 +39,7 @@ function normalizeAddress(value: unknown): string | undefined {
   }
   const trimmed = value.trim().replace(UPPERCASE_HEX_PREFIX, "0x");
   try {
-    return ethers.getAddress(trimmed).toLowerCase();
+    return normalizeAddressForStorage(trimmed);
   } catch {
     return undefined;
   }

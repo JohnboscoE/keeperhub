@@ -63,9 +63,15 @@ export function buildProtocolFunctionArgs(
   protocolSlug: string,
   contractKey: string,
   functionName: string,
-  /** Normalized chain id. The body's own `network`/`chainId` may be a chain
-   *  name or the deprecated alias, and guards index addresses by chain id. */
-  network?: string
+  /**
+   * Normalized chain id. The body's own `network`/`chainId` may be a chain
+   * name or the deprecated alias, and guards index addresses by chain id.
+   *
+   * Required, not optional: `contractAddressOn` returns undefined without it,
+   * which silently drops the position-manager half of the collect guard. A
+   * second caller should have to supply it rather than lose that by omission.
+   */
+  network: string
 ): BuildProtocolFunctionArgsResult {
   const protocol = getProtocol(protocolSlug);
   if (!protocol) {
